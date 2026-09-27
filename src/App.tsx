@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { supabase } from "./supabaseClient";
+import dropexIcon from "./assets/dropex-icon.png";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -358,7 +359,11 @@ export default function App() {
   const header = (
     <div className="header">
       <div className="brand">
-        Drop<span>Ex</span> <small>Rider</small>
+        <img className="brand-mark" src={dropexIcon} alt="" width={30} height={30} />
+        <div className="brand-text">
+          <span className="brand-name">DropEx</span>
+          <small>Rider</small>
+        </div>
       </div>
       {screen === "home" || screen === "blocked" ? (
         <button className="link" onClick={signOut}>
