@@ -1,27 +1,27 @@
 :root {
-  /* DropEx brand palette — same tokens as the customer app, so the rider
-     app reads as part of the same product instead of a re-skinned template. */
-  --accent: #f0264f;
-  --accent-dark: #b81139;
-  --accent-soft: #ffe1e9;
-  --brand: #ff8a3d;
-  --brand-dark: #d9631c;
-  --brand-soft: #ffefdd;
+  /* DropEx official brand palette — matched to the marketing site's theme,
+     same tokens as the customer app, so every DropEx surface shares one identity. */
+  --accent: #e51249;
+  --accent-dark: #b20021;
+  --accent-soft: #ffe0e1;
+  --brand: #f07a66;
+  --brand-dark: #b94837;
+  --brand-soft: #ffe4dc;
   --success: #1fa463;
-  --success-soft: #e1f7ec;
-  --amber: #b9791e;
-  --amber-soft: #f7ecd6;
-  --bg: #fff6f2;
+  --success-soft: #e0f6de;
+  --amber: #9b6400;
+  --amber-soft: #ffefd9;
+  --bg: #fff8f4;
   --card: #ffffff;
-  --border: #f4e2dd;
-  --text: #26121a;
-  --muted: #8c7880;
-  --danger: #d64545;
-  --danger-soft: #fce7e1;
-  --shadow-card: 0 2px 14px rgba(38, 18, 26, 0.06);
-  --shadow-float: 0 12px 28px rgba(240, 38, 79, 0.28);
-  --font-display: "Baloo 2", "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --border: #eed8d5;
+  --text: #281417;
+  --muted: #6b5856;
+  --danger: #e7000b;
+  --danger-soft: #ffe7e4;
+  --shadow-card: 0 2px 14px rgba(40, 20, 23, 0.06);
+  --shadow-float: 0 12px 28px rgba(229, 18, 73, 0.28);
+  --font-display: "Plus Jakarta Sans", "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-family: var(--font-body);
 }
 
@@ -50,9 +50,25 @@ body {
   justify-content: space-between;
 }
 
-.brand { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--accent-dark); }
-.brand span { color: var(--brand-dark); }
-.brand small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 4px; font-family: var(--font-body); }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: var(--accent);
+}
+.brand small { font-size: 11px; font-weight: 600; color: var(--muted); font-family: var(--font-body); }
+.brand-mark { flex-shrink: 0; }
 
 .content { flex: 1; padding: 8px 20px 32px; }
 
@@ -110,7 +126,7 @@ button.primary {
   font-size: 15.5px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 8px 18px rgba(240, 38, 79, 0.28);
+  box-shadow: 0 8px 18px rgba(229, 18, 73, 0.28);
 }
 button.primary:hover:not(:disabled) { background: var(--accent-dark); }
 button.primary:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
@@ -173,7 +189,7 @@ button.link {
 
 .banner {
   background: var(--amber-soft);
-  color: #8a5a17;
+  color: var(--amber);
   border: 1px solid rgba(185, 121, 30, 0.3);
   padding: 12px 14px;
   border-radius: 12px;
@@ -224,7 +240,7 @@ button.link {
   color: var(--accent-dark);
   cursor: pointer;
 }
-.tab.on { background: var(--accent); color: #fff; box-shadow: 0 4px 10px rgba(240, 38, 79, 0.3); }
+.tab.on { background: var(--accent); color: #fff; box-shadow: 0 4px 10px rgba(229, 18, 73, 0.3); }
 
 .order-card { padding: 0; overflow: hidden; }
 .order-head {
@@ -257,7 +273,7 @@ button.link {
 
 .cod-banner {
   background: var(--amber-soft);
-  color: #8a5a17;
+  color: var(--amber);
   border: 1px solid rgba(185, 121, 30, 0.3);
   border-radius: 12px;
   padding: 10px 12px;
@@ -267,7 +283,7 @@ button.link {
 }
 .cod-chip {
   background: var(--amber-soft);
-  color: #8a5a17;
+  color: var(--amber);
   border-radius: 999px;
   padding: 3px 10px;
   font-size: 11px;
@@ -295,6 +311,6 @@ button.link {
   background: currentColor;
   flex-shrink: 0;
 }
-.pill.warn { background: var(--amber-soft); color: #8a5a17; }
+.pill.warn { background: var(--amber-soft); color: var(--amber); }
 .pill.danger { background: var(--danger-soft); color: var(--danger); }
 .pill.success { background: var(--success-soft); color: var(--success); }
