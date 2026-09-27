@@ -1,9 +1,22 @@
-{
-  "name": "DropEx Rider",
-  "short_name": "DropEx Rider",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#fff6f2",
-  "theme_color": "#b81139",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
-}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e51249" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/dropex-icon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <title>DropEx Rider</title>
+    <meta name="description" content="DropEx rider app — accept and deliver orders." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
