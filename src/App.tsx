@@ -128,6 +128,9 @@ function friendlyLoginError(message: string): string {
 // App
 // ---------------------------------------------------------------------------
 
+// Last location error shown to the rider, so the same message isn't repeated on every GPS tick.
+let lastLocationError = "";
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   const [emailInput, setEmailInput] = useState("");
@@ -144,6 +147,8 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [toggleBusy, setToggleBusy] = useState(false);
   const seenAssigned = useRef<Set<string> | null>(null);
+  const ordersRef = useRef<Order[]>([]);
+  ordersRef.current = orders;
 
   const loadAll = useCallback(async (silent: boolean) => {
     try {
@@ -208,11 +213,15 @@ export default function App() {
     const refresh = () => {
       if (document.visibilityState === "visible") void loadAll(true);
     };
-    const timer = window.setInterval(refresh, 20000);
+    const timer = window.setInterval(refresh, 8000);
     document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
     };
   }, [screen, loadAll]);
 
@@ -223,9 +232,6 @@ export default function App() {
     // صرف اس وقت لوکیشن بھیجیں جب رائڈر Home پر ہو اور Online ہو
     if (screen !== "home" || !me || !me.is_online) return;
 
-    // پہلے ایکٹو آرڈر فائنڈ کریں
-    const activeOrder = orders.find((o) => stageOf(o.status) !== "done");
-
     if (!navigator.geolocation) {
       console.warn("Geolocation is not supported by this browser/device.");
       return;
@@ -235,10 +241,12 @@ export default function App() {
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         const { latitude, longitude, heading } = pos.coords;
+        // پہلے ایکٹو آرڈر فائنڈ کریں (read at send time so the GPS watch isn't restarted on every refresh)
+        const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
 
         try {
           // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
-          await supabase.from("rider_locations").upsert(
+          const { error: locErr } = await supabase.from("rider_locations").upsert(
             {
               rider_id: me.id,
               order_id: activeOrder ? activeOrder.id : null,
@@ -249,12 +257,30 @@ export default function App() {
             },
             { onConflict: "rider_id" } // ہر رائڈر کی صرف 1 تازہ رو رہے گی
           );
+          // supabase-js does not throw on database errors; it returns them, so check explicitly.
+          if (locErr) {
+            console.error("Location upload failed:", locErr);
+            const msg = `Location not saved: ${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}`;
+            if (msg !== lastLocationError) {
+              lastLocationError = msg;
+              setNotice(msg);
+            }
+          } else {
+            lastLocationError = "";
+          }
         } catch (e) {
           console.error("Location upload failed:", e);
         }
       },
       (err) => {
         console.warn("GPS error:", err.message);
+        const msg = err.code === 1
+          ? "Location permission is blocked. Allow location for this app, or orders cannot be assigned to you."
+          : `GPS error: ${err.message}`;
+        if (msg !== lastLocationError) {
+          lastLocationError = msg;
+          setNotice(msg);
+        }
       },
       {
         enableHighAccuracy: true,
@@ -267,7 +293,35 @@ export default function App() {
     return () => {
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [screen, me, orders]);
+  }, [screen, me?.id, me?.is_online]);
+
+  // Keep the screen awake while the rider is online with the app open. A web page can only
+  // send GPS while it is visible; with the screen off the browser pauses it.
+  useEffect(() => {
+    if (screen !== "home" || !me?.is_online) return;
+    const held: { lock: WakeLockSentinel | null } = { lock: null };
+    let cancelled = false;
+    const acquire = async () => {
+      try {
+        if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+        const lock = await navigator.wakeLock.request("screen");
+        if (cancelled) void lock.release();
+        else held.lock = lock;
+      } catch {
+        /* unsupported or denied — nothing to do */
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void acquire();
+    };
+    void acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      void held.lock?.release();
+    };
+  }, [screen, me?.is_online]);
 
   useEffect(() => {
     if (!notice) return;
