@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { supabase } from "./supabaseClient";
 import dropexIcon from "./assets/dropex-icon.png";
+import { publishRiderPosition, clearRiderPosition } from "./riderPosition";
+
+// Lazy-loaded so the Google Maps JS API only downloads when a delivery is actually on the way.
+const DeliveryMap = lazy(() => import("./DeliveryMap").then((m) => ({ default: m.DeliveryMap })));
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +38,8 @@ type Order = {
   customer_phone: string | null;
   pickup_address: string | null;
   drop_address: string | null;
+  drop_lat: number | null;
+  drop_lng: number | null;
   zone_name: string | null;
   distance_km: number | null;
   fare_amount: number | null;
@@ -243,6 +249,8 @@ export default function App() {
         const { latitude, longitude, heading } = pos.coords;
         // پہلے ایکٹو آرڈر فائنڈ کریں (read at send time so the GPS watch isn't restarted on every refresh)
         const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
+        // Hand the same fix to the delivery map (no second GPS watcher needed).
+        publishRiderPosition({ lat: latitude, lng: longitude });
 
         try {
           // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
@@ -292,6 +300,7 @@ export default function App() {
     // سکرین تبدیل ہونے یا Offline ہونے پر GPS بند کریں
     return () => {
       navigator.geolocation.clearWatch(watchId);
+      clearRiderPosition();
     };
   }, [screen, me?.id, me?.is_online]);
 
@@ -608,6 +617,11 @@ function OrderCard({
   const [err, setErr] = useState<string | null>(null);
 
   const stage = stageOf(order.status);
+  // Memoised so the map effect does not restart on every list refresh.
+  const dropPoint = useMemo(
+    () => ({ lat: Number(order.drop_lat), lng: Number(order.drop_lng) }),
+    [order.drop_lat, order.drop_lng],
+  );
   const cod = Number(order.cod_amount ?? 0);
   const phone = order.contact_phone || order.customer_phone || "";
   const contact = order.contact_name || order.customer_name || "Customer";
@@ -668,6 +682,13 @@ function OrderCard({
               </a>
             ) : null}
           </div>
+
+          {stage === "onWay" && typeof order.drop_lat === "number" && typeof order.drop_lng === "number" ? (
+            // Delivery started: live Rider -> Drop-off route (unmounts, and stops all updates, once delivered).
+            <Suspense fallback={<p className="hint">Loading map…</p>}>
+              <DeliveryMap drop={dropPoint} />
+            </Suspense>
+          ) : null}
 
           <div className="kv">
             <span>Contact</span>
