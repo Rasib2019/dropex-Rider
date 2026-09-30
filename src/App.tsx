@@ -1,3 +1,4 @@
+import { Bike, History, User, Wallet } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { supabase } from "./supabaseClient";
@@ -147,7 +148,7 @@ export default function App() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [tab, setTab] = useState<"active" | "history">("active");
+  const [tab, setTab] = useState<"orders" | "history" | "earnings" | "account">("orders");
   const [blockedMsg, setBlockedMsg] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -532,7 +533,7 @@ export default function App() {
     .filter((o) => stageOf(o.status) !== "done")
     .sort((a, b) => STAGE_RANK[stageOf(a.status)] - STAGE_RANK[stageOf(b.status)]);
   const history = orders.filter((o) => stageOf(o.status) === "done");
-  const list = tab === "active" ? active : history;
+  const list = tab === "orders" ? active : history;
 
   return (
     <div className="app">
@@ -558,38 +559,75 @@ export default function App() {
           </button>
         </div>
 
-        <div className="stats">
-          <div className="stat">
-            <div className="stat-value">{me?.delivered_today ?? 0}</div>
-            <div className="stat-label">Delivered today</div>
-          </div>
-          <div className="stat">
-            <div className="stat-value">{formatPKR(me?.earnings_today)}</div>
-            <div className="stat-label">Earned today</div>
-          </div>
-          <div className="stat">
-            <div className="stat-value">{formatPKR(me?.cod_in_hand)}</div>
-            <div className="stat-label">Cash in hand</div>
-          </div>
-        </div>
+        {tab === "earnings" ? (
+          <>
+            <h1>Earnings</h1>
+            <div className="stats">
+              <div className="stat">
+                <div className="stat-value">{me?.delivered_today ?? 0}</div>
+                <div className="stat-label">Delivered today</div>
+              </div>
+              <div className="stat">
+                <div className="stat-value">{formatPKR(me?.earnings_today)}</div>
+                <div className="stat-label">Earned today</div>
+              </div>
+              <div className="stat">
+                <div className="stat-value">{formatPKR(me?.cod_in_hand)}</div>
+                <div className="stat-label">Cash in hand</div>
+              </div>
+            </div>
+          </>
+        ) : null}
 
-        <div className="tabs">
-          <button className={tab === "active" ? "tab on" : "tab"} onClick={() => setTab("active")}>
-            Active ({active.length})
-          </button>
-          <button className={tab === "history" ? "tab on" : "tab"} onClick={() => setTab("history")}>
-            History
-          </button>
-        </div>
+        {tab === "account" ? (
+          <>
+            <h1>Account</h1>
+            <div className="card">
+              <div className="acct-row"><span>Name</span><span>{me?.full_name ?? "—"}</span></div>
+              <div className="acct-row"><span>Phone</span><span>{me?.phone ?? "—"}</span></div>
+              <div className="acct-row"><span>Vehicle</span><span>{[me?.vehicle_type, me?.vehicle_number].filter(Boolean).join(" · ") || "—"}</span></div>
+            </div>
+            <button className="secondary" style={{ marginTop: 12 }} onClick={signOut}>
+              Sign out
+            </button>
+          </>
+        ) : null}
 
-        {list.length === 0 ? (
-          <p className="empty">
-            {tab === "active" ? "No active orders. New orders assigned to you will appear here." : "No past orders yet."}
-          </p>
-        ) : (
-          list.map((o) => <OrderCard key={o.id} order={o} defaultOpen={tab === "active"} onAct={handleAction} />)
-        )}
+        {tab === "orders" || tab === "history" ? (
+          list.length === 0 ? (
+            <p className="empty">
+              {tab === "orders" ? "No active orders. New orders assigned to you will appear here." : "No past orders yet."}
+            </p>
+          ) : (
+            list.map((o) => <OrderCard key={o.id} order={o} defaultOpen={tab === "orders"} onAct={handleAction} />)
+          )
+        ) : null}
       </div>
+
+      <nav className="bottom-nav" aria-label="Main navigation">
+        {(
+          [
+            { key: "orders", label: "Orders", Icon: Bike, badge: active.length },
+            { key: "history", label: "History", Icon: History, badge: 0 },
+            { key: "earnings", label: "Earnings", Icon: Wallet, badge: 0 },
+            { key: "account", label: "Account", Icon: User, badge: 0 },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.key}
+            className="bottom-nav-item"
+            data-active={tab === t.key}
+            aria-current={tab === t.key ? "page" : undefined}
+            onClick={() => setTab(t.key)}
+          >
+            <span className="bottom-nav-icon">
+              <t.Icon size={22} aria-hidden="true" />
+              {t.badge > 0 ? <span className="bottom-nav-badge">{t.badge}</span> : null}
+            </span>
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
