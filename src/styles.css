@@ -350,3 +350,62 @@ button.link {
   font-size: 12px;
   font-weight: 700;
 }
+
+/* Account rows. */
+.acct-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.acct-row:last-child { border-bottom: none; }
+.acct-row span:first-child { color: var(--muted); }
+.acct-row span:last-child { font-weight: 600; text-align: right; word-break: break-word; }
+
+/* Bottom navigation bar: Orders / History / Earnings / Account. */
+.bottom-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(40, 20, 23, 0.06);
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+}
+.bottom-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  padding: 6px 2px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.bottom-nav-item[data-active="true"] { color: var(--accent); background: var(--accent-soft); }
+.bottom-nav-icon { position: relative; display: inline-flex; }
+.bottom-nav-badge {
+  position: absolute;
+  top: -6px;
+  right: -10px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
