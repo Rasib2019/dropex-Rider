@@ -1,9 +1,11 @@
-import { Bike, History, User, Wallet } from "lucide-react";
+import { Bike, CalendarCheck, History, User, Wallet } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { supabase } from "./supabaseClient";
 import dropexIcon from "./assets/dropex-icon.png";
 import { publishRiderPosition, clearRiderPosition } from "./riderPosition";
+import { useAttendance, useAttendanceHistory } from "./attendance";
+import { AttendanceCard, AttendanceHistory } from "./AttendancePanel";
 
 // Lazy-loaded so the Google Maps JS API only downloads when a delivery is actually on the way.
 const DeliveryMap = lazy(() => import("./DeliveryMap").then((m) => ({ default: m.DeliveryMap })));
@@ -148,7 +150,7 @@ export default function App() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [tab, setTab] = useState<"orders" | "history" | "earnings" | "account">("orders");
+  const [tab, setTab] = useState<"orders" | "history" | "attendance" | "earnings" | "account">("orders");
   const [blockedMsg, setBlockedMsg] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -247,11 +249,11 @@ export default function App() {
     // لائیو GPS واچر انسٹال کریں
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
-        const { latitude, longitude, heading } = pos.coords;
+        const { latitude, longitude, heading, accuracy } = pos.coords;
         // پہلے ایکٹو آرڈر فائنڈ کریں (read at send time so the GPS watch isn't restarted on every refresh)
         const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
         // Hand the same fix to the delivery map (no second GPS watcher needed).
-        publishRiderPosition({ lat: latitude, lng: longitude });
+        publishRiderPosition({ lat: latitude, lng: longitude }, { accuracy, timestamp: pos.timestamp });
 
         try {
           // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
@@ -332,6 +334,10 @@ export default function App() {
       void held.lock?.release();
     };
   }, [screen, me?.is_online]);
+
+  // Shift + attendance (server-side RPCs; independent of the GPS watcher above).
+  const attendance = useAttendance(screen === "home");
+  const attendanceHistory = useAttendanceHistory(screen === "home", tab === "attendance", attendance.version);
 
   useEffect(() => {
     if (!notice) return;
@@ -559,6 +565,15 @@ export default function App() {
           </button>
         </div>
 
+        {tab === "orders" ? <AttendanceCard att={attendance} /> : null}
+
+        {tab === "attendance" ? (
+          <>
+            <AttendanceCard att={attendance} />
+            <AttendanceHistory history={attendanceHistory} />
+          </>
+        ) : null}
+
         {tab === "earnings" ? (
           <>
             <h1>Earnings</h1>
@@ -609,6 +624,7 @@ export default function App() {
           [
             { key: "orders", label: "Orders", Icon: Bike, badge: active.length },
             { key: "history", label: "History", Icon: History, badge: 0 },
+            { key: "attendance", label: "Attendance", Icon: CalendarCheck, badge: 0 },
             { key: "earnings", label: "Earnings", Icon: Wallet, badge: 0 },
             { key: "account", label: "Account", Icon: User, badge: 0 },
           ] as const
