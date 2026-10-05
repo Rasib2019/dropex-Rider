@@ -140,6 +140,32 @@ function friendlyLoginError(message: string): string {
 // Last location error shown to the rider, so the same message isn't repeated on every GPS tick.
 let lastLocationError = "";
 
+// ---- Scalability: how often we write to the database --------------------------------------------
+// watchPosition can fire about once a second. Writing every fix would make GPS the biggest source of
+// database traffic once many riders are online. We still publish EVERY fix to the on-device map (it is
+// free); only the rider_locations upsert is throttled by time + distance + delivery state.
+const GPS_POLICY = {
+  // while carrying an order the customer is watching: smooth, but not wasteful
+  active: { minIntervalMs: 5_000, minMoveM: 15, heartbeatMs: 20_000 },
+  // online but idle: just enough for dispatch to know roughly where the rider is
+  idle: { minIntervalMs: 10_000, minMoveM: 40, heartbeatMs: 30_000 },
+};
+const GPS_MAX_ACCURACY_M = 100; // ignore very poor fixes (cell-tower / indoor guesses)
+const GPS_FIRST_FIX_MAX_ACCURACY_M = 500; // ...but accept a rough first fix so the rider appears at all
+
+function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Fallback polling only. Realtime pushes changes immediately; this just reconciles missed events.
+const ORDERS_FALLBACK_POLL_MS = 20_000; // orders list
+const ME_REFRESH_MS = 60_000; // rider_me (profile/online state) rarely changes on its own
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   const [emailInput, setEmailInput] = useState("");
@@ -158,11 +184,17 @@ export default function App() {
   const seenAssigned = useRef<Set<string> | null>(null);
   const ordersRef = useRef<Order[]>([]);
   ordersRef.current = orders;
+  const meRef = useRef<Me | null>(null);
+  meRef.current = me;
+  const lastSentRef = useRef<{ lat: number; lng: number; t: number; orderId: string | null } | null>(null);
+  const uploadingRef = useRef(false);
 
-  const loadAll = useCallback(async (silent: boolean) => {
+  const loadAll = useCallback(async (silent: boolean, light = false) => {
     try {
-      const m = await callRpc<Me>("rider_me");
-      setMe(m);
+      // light = orders only; reuse the profile we already have (saves one RPC per refresh)
+      const cached = light ? meRef.current : null;
+      const m = cached ?? (await callRpc<Me>("rider_me"));
+      if (!cached) setMe(m);
       if (m.approval_status !== "approved") {
         setBlockedMsg(
           m.approval_status === "pending"
@@ -216,23 +248,47 @@ export default function App() {
     })();
   }, [loadAll]);
 
-  // Keep the list fresh while the rider has the app open
+  // Keep the list fresh while the rider has the app open.
+  // Primary: Supabase Realtime on this rider's orders (instant). Fallback: a slower poll that only
+  // reloads the orders list (the profile is refreshed once a minute), plus a full refresh whenever the
+  // app regains focus / network. This cuts routine API calls by roughly 70% vs the old 8 s double-RPC poll.
+  const riderId = me?.id ?? null;
   useEffect(() => {
     if (screen !== "home") return;
-    const refresh = () => {
-      if (document.visibilityState === "visible") void loadAll(true);
+    let lastFull = Date.now();
+    const refresh = (full = false) => {
+      if (document.visibilityState !== "visible") return;
+      const doFull = full || Date.now() - lastFull >= ME_REFRESH_MS;
+      if (doFull) lastFull = Date.now();
+      void loadAll(true, !doFull);
     };
-    const timer = window.setInterval(refresh, 8000);
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("focus", refresh);
-    window.addEventListener("online", refresh);
+    const timer = window.setInterval(() => refresh(false), ORDERS_FALLBACK_POLL_MS);
+    const onFocus = () => refresh(true);
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onFocus);
+
+    let debounce: number | undefined;
+    const channel = riderId
+      ? supabase
+          .channel(`rider-orders-${riderId}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `rider_id=eq.${riderId}` }, () => {
+            // bursts of events -> one refresh
+            window.clearTimeout(debounce);
+            debounce = window.setTimeout(() => refresh(false), 700);
+          })
+          .subscribe()
+      : null;
+
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", refresh);
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("online", refresh);
+      window.clearTimeout(debounce);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onFocus);
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, [screen, loadAll]);
+  }, [screen, loadAll, riderId]);
 
   // ---------------------------------------------------------------------------
   // LIVE GPS LOCATION TRACKING LOGIC (ADDED HERE)
@@ -246,6 +302,8 @@ export default function App() {
       return;
     }
 
+    lastSentRef.current = null; // fresh watcher: send the first good fix straight away
+    uploadingRef.current = false;
     // لائیو GPS واچر انسٹال کریں
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
@@ -254,6 +312,24 @@ export default function App() {
         const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
         // Hand the same fix to the delivery map (no second GPS watcher needed).
         publishRiderPosition({ lat: latitude, lng: longitude }, { accuracy, timestamp: pos.timestamp });
+
+        // --- Throttle database writes (time + distance + delivery state + accuracy) ---
+        const now = Date.now();
+        const last = lastSentRef.current;
+        const policy = activeOrder ? GPS_POLICY.active : GPS_POLICY.idle;
+        const orderId = activeOrder ? activeOrder.id : null;
+        const maxAcc = last ? GPS_MAX_ACCURACY_M : GPS_FIRST_FIX_MAX_ACCURACY_M;
+        if (typeof accuracy === "number" && accuracy > maxAcc) return; // poor fix: not worth a write
+        if (uploadingRef.current) return; // previous write still in flight
+        if (last) {
+          const elapsed = now - last.t;
+          const moved = distanceM(last.lat, last.lng, latitude, longitude);
+          const orderChanged = last.orderId !== orderId; // pickup/delivery state changed: update immediately
+          const due = elapsed >= policy.heartbeatMs || (elapsed >= policy.minIntervalMs && moved >= policy.minMoveM);
+          if (!orderChanged && !due) return;
+        }
+        uploadingRef.current = true;
+        lastSentRef.current = { lat: latitude, lng: longitude, t: now, orderId };
 
         try {
           // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
@@ -270,6 +346,7 @@ export default function App() {
           );
           // supabase-js does not throw on database errors; it returns them, so check explicitly.
           if (locErr) {
+            lastSentRef.current = last; // not saved: let the next fix retry
             console.error("Location upload failed:", locErr);
             const msg = `Location not saved: ${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}`;
             if (msg !== lastLocationError) {
@@ -281,6 +358,9 @@ export default function App() {
           }
         } catch (e) {
           console.error("Location upload failed:", e);
+          lastSentRef.current = last; // the write failed: allow the next fix to retry straight away
+        } finally {
+          uploadingRef.current = false;
         }
       },
       (err) => {
