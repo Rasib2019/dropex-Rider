@@ -150,8 +150,9 @@ const GPS_POLICY = {
   // online but idle: just enough for dispatch to know roughly where the rider is
   idle: { minIntervalMs: 10_000, minMoveM: 40, heartbeatMs: 30_000 },
 };
-const GPS_MAX_ACCURACY_M = 100; // ignore very poor fixes (cell-tower / indoor guesses)
-const GPS_FIRST_FIX_MAX_ACCURACY_M = 500; // ...but accept a rough first fix so the rider appears at all
+const GPS_MAX_ACCURACY_M = 100; // fixes worse than this are only sent as a heartbeat (not on every tick)
+const GPS_HARD_MAX_ACCURACY_M = 1000; // anything worse than this is never sent (pure guesses)
+const GPS_FIX_MAX_AGE_MS = 120_000; // the heartbeat re-sends the last fix only while it is this fresh
 
 function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 6371000;
@@ -305,63 +306,81 @@ export default function App() {
     lastSentRef.current = null; // fresh watcher: send the first good fix straight away
     uploadingRef.current = false;
     // لائیو GPS واچر انسٹال کریں
+    type Fix = { lat: number; lng: number; heading: number | null; accuracy: number | null; ts: number };
+    let latestFix: Fix | null = null;
+
+    // Decide whether this fix is worth a database write, and send it if so.
+    const consider = async (fix: Fix) => {
+      const now = Date.now();
+      // read at send time so the GPS watch isn't restarted on every refresh
+      const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
+      const orderId = activeOrder ? activeOrder.id : null;
+      const policy = activeOrder ? GPS_POLICY.active : GPS_POLICY.idle;
+      const last = lastSentRef.current;
+      const elapsed = last ? now - last.t : Infinity;
+
+      if (typeof fix.accuracy === "number" && fix.accuracy > GPS_HARD_MAX_ACCURACY_M) return; // pure guess
+      // A poor fix (laptop Wi-Fi / indoors) is not worth a write on every tick, but it IS sent as a
+      // heartbeat, so the rider never silently goes stale for dispatch.
+      if (typeof fix.accuracy === "number" && fix.accuracy > GPS_MAX_ACCURACY_M && last && elapsed < policy.heartbeatMs) return;
+      if (uploadingRef.current) return; // previous write still in flight
+      if (last) {
+        const moved = distanceM(last.lat, last.lng, fix.lat, fix.lng);
+        const orderChanged = last.orderId !== orderId; // pickup/delivery state changed: update immediately
+        const due = elapsed >= policy.heartbeatMs || (elapsed >= policy.minIntervalMs && moved >= policy.minMoveM);
+        if (!orderChanged && !due) return;
+      }
+      uploadingRef.current = true;
+      lastSentRef.current = { lat: fix.lat, lng: fix.lng, t: now, orderId };
+
+      try {
+        // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
+        const { error: locErr } = await supabase.from("rider_locations").upsert(
+          {
+            rider_id: me.id,
+            order_id: orderId,
+            latitude: fix.lat,
+            longitude: fix.lng,
+            heading: fix.heading || 0,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "rider_id" }, // ہر رائڈر کی صرف 1 تازہ رو رہے گی
+        );
+        // supabase-js does not throw on database errors; it returns them, so check explicitly.
+        if (locErr) {
+          lastSentRef.current = last; // not saved: let the next fix retry
+          console.error("Location upload failed:", locErr);
+          const msg = `Location not saved: ${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}`;
+          if (msg !== lastLocationError) {
+            lastLocationError = msg;
+            setNotice(msg);
+          }
+        } else {
+          lastLocationError = "";
+        }
+      } catch (e) {
+        console.error("Location upload failed:", e);
+        lastSentRef.current = last; // the write failed: allow the next fix to retry straight away
+      } finally {
+        uploadingRef.current = false;
+      }
+    };
+
+    // Heartbeat: browsers only call the GPS callback when the position changes. A rider standing still
+    // (e.g. waiting at a shop) would otherwise stop updating and look "stale" to dispatch. Every 10 s we
+    // re-consider the last fix; the throttle sends it once the heartbeat interval has passed. A fix older
+    // than 2 minutes is NOT re-sent, so a stalled GPS / backgrounded app still shows as stale.
+    const heartbeat = window.setInterval(() => {
+      if (latestFix && Date.now() - latestFix.ts <= GPS_FIX_MAX_AGE_MS) void consider(latestFix);
+    }, 10_000);
+
     const watchId = navigator.geolocation.watchPosition(
-      async (pos) => {
+      (pos) => {
         const { latitude, longitude, heading, accuracy } = pos.coords;
-        // پہلے ایکٹو آرڈر فائنڈ کریں (read at send time so the GPS watch isn't restarted on every refresh)
-        const activeOrder = ordersRef.current.find((o) => stageOf(o.status) !== "done");
         // Hand the same fix to the delivery map (no second GPS watcher needed).
         publishRiderPosition({ lat: latitude, lng: longitude }, { accuracy, timestamp: pos.timestamp });
-
-        // --- Throttle database writes (time + distance + delivery state + accuracy) ---
-        const now = Date.now();
-        const last = lastSentRef.current;
-        const policy = activeOrder ? GPS_POLICY.active : GPS_POLICY.idle;
-        const orderId = activeOrder ? activeOrder.id : null;
-        const maxAcc = last ? GPS_MAX_ACCURACY_M : GPS_FIRST_FIX_MAX_ACCURACY_M;
-        if (typeof accuracy === "number" && accuracy > maxAcc) return; // poor fix: not worth a write
-        if (uploadingRef.current) return; // previous write still in flight
-        if (last) {
-          const elapsed = now - last.t;
-          const moved = distanceM(last.lat, last.lng, latitude, longitude);
-          const orderChanged = last.orderId !== orderId; // pickup/delivery state changed: update immediately
-          const due = elapsed >= policy.heartbeatMs || (elapsed >= policy.minIntervalMs && moved >= policy.minMoveM);
-          if (!orderChanged && !due) return;
-        }
-        uploadingRef.current = true;
-        lastSentRef.current = { lat: latitude, lng: longitude, t: now, orderId };
-
-        try {
-          // Supabase 'rider_locations' ٹیبل میں پوزیشن update/upsert کریں۔
-          const { error: locErr } = await supabase.from("rider_locations").upsert(
-            {
-              rider_id: me.id,
-              order_id: activeOrder ? activeOrder.id : null,
-              latitude: latitude,
-              longitude: longitude,
-              heading: heading || 0,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "rider_id" } // ہر رائڈر کی صرف 1 تازہ رو رہے گی
-          );
-          // supabase-js does not throw on database errors; it returns them, so check explicitly.
-          if (locErr) {
-            lastSentRef.current = last; // not saved: let the next fix retry
-            console.error("Location upload failed:", locErr);
-            const msg = `Location not saved: ${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}`;
-            if (msg !== lastLocationError) {
-              lastLocationError = msg;
-              setNotice(msg);
-            }
-          } else {
-            lastLocationError = "";
-          }
-        } catch (e) {
-          console.error("Location upload failed:", e);
-          lastSentRef.current = last; // the write failed: allow the next fix to retry straight away
-        } finally {
-          uploadingRef.current = false;
-        }
+        latestFix = { lat: latitude, lng: longitude, heading: heading ?? null, accuracy: typeof accuracy === "number" ? accuracy : null, ts: Date.now() };
+        void consider(latestFix);
       },
       (err) => {
         console.warn("GPS error:", err.message);
@@ -383,6 +402,7 @@ export default function App() {
     // سکرین تبدیل ہونے یا Offline ہونے پر GPS بند کریں
     return () => {
       navigator.geolocation.clearWatch(watchId);
+      window.clearInterval(heartbeat);
       clearRiderPosition();
     };
   }, [screen, me?.id, me?.is_online]);
