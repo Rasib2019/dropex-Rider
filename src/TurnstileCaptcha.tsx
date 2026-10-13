@@ -6,6 +6,7 @@ type TurnstileWidget = {
     container: HTMLElement,
     options: {
       sitekey: string;
+      size?: "normal" | "compact" | "flexible";
       callback?: (token: string) => void;
       "expired-callback"?: () => void;
       "error-callback"?: () => void;
@@ -62,6 +63,10 @@ export function TurnstileCaptcha({
         containerRef.current,
         {
           sitekey: siteKey,
+
+          // Makes Turnstile responsive on mobile
+          size: "flexible",
+
           theme: "auto",
 
           callback: onToken,
@@ -128,30 +133,38 @@ export function TurnstileCaptcha({
       style={{
         width: "100%",
         maxWidth: "100%",
+        boxSizing: "border-box",
         overflow: "hidden",
+
+        // Space between email field and CAPTCHA
+        marginTop: "16px",
+        marginBottom: "8px",
+
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        boxSizing: "border-box",
       }}
     >
       <div
         style={{
-          width: "304px",
-          maxWidth: "100%",
+          width: "100%",
+          maxWidth: "304px",
           minHeight: "65px",
+          boxSizing: "border-box",
+
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          boxSizing: "border-box",
         }}
       >
         <div
           ref={containerRef}
           style={{
-            width: "304px",
-            maxWidth: "100%",
+            width: "100%",
+            maxWidth: "304px",
             minHeight: "65px",
+            boxSizing: "border-box",
+
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
