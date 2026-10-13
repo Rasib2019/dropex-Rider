@@ -1,4 +1,3 @@
-```tsx
 import { useEffect, useRef } from "react";
 
 type TurnstileWidget = {
@@ -63,10 +62,7 @@ export function TurnstileCaptcha({
         containerRef.current,
         {
           sitekey: siteKey,
-
-          // Makes Turnstile responsive on mobile
           size: "flexible",
-
           theme: "auto",
 
           callback: onToken,
@@ -133,45 +129,27 @@ export function TurnstileCaptcha({
       style={{
         width: "100%",
         maxWidth: "100%",
-        boxSizing: "border-box",
         overflow: "hidden",
-
-        // Space between email field and CAPTCHA
+        boxSizing: "border-box",
         marginTop: "16px",
         marginBottom: "8px",
-
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
       }}
     >
       <div
+        ref={containerRef}
         style={{
           width: "100%",
           maxWidth: "304px",
           minHeight: "65px",
           boxSizing: "border-box",
-
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
         }}
-      >
-        <div
-          ref={containerRef}
-          style={{
-            width: "100%",
-            maxWidth: "304px",
-            minHeight: "65px",
-            boxSizing: "border-box",
-
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-          }}
-        />
-      </div>
+      />
     </div>
   );
 }
-```
