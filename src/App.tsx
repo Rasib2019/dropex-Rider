@@ -6,6 +6,7 @@ import dropexIcon from "./assets/dropex-icon.png";
 import { publishRiderPosition, clearRiderPosition } from "./riderPosition";
 import { useAttendance, useAttendanceHistory } from "./attendance";
 import { AttendanceCard, AttendanceHistory } from "./AttendancePanel";
+import { TurnstileCaptcha } from "./TurnstileCaptcha";
 
 // Lazy-loaded so the Google Maps JS API only downloads when a delivery is actually on the way.
 const DeliveryMap = lazy(() => import("./DeliveryMap").then((m) => ({ default: m.DeliveryMap })));
@@ -174,6 +175,7 @@ export default function App() {
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState("");
 
   const [me, setMe] = useState<Me | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -451,13 +453,17 @@ export default function App() {
     setBusy(true);
     try {
       const clean = emailInput.trim().toLowerCase();
+      if (!captchaToken) {
+        throw new Error("Please complete the CAPTCHA verification.");
+      }
       const { error: otpErr } = await supabase.auth.signInWithOtp({
         email: clean,
-        options: { shouldCreateUser: false },
+        options: { shouldCreateUser: false, captchaToken },
       });
       if (otpErr) throw new Error(friendlyLoginError(otpErr.message));
       setPendingEmail(clean);
       setOtp("");
+      setCaptchaToken("");
       setScreen("otp");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send the code.");
@@ -494,6 +500,7 @@ export default function App() {
     setPendingEmail("");
     setOtp("");
     setError(null);
+    setCaptchaToken("");
     seenAssigned.current = null;
     setScreen("login");
   }
@@ -572,8 +579,9 @@ export default function App() {
                 onChange={(e) => setEmailInput(e.target.value)}
                 required
               />
+              <TurnstileCaptcha onToken={setCaptchaToken} />
               {error ? <div className="error">{error}</div> : null}
-              <button className="primary" type="submit" disabled={busy}>
+              <button className="primary" type="submit" disabled={busy || !captchaToken}>
                 {busy ? "Sending…" : "Send code"}
               </button>
             </form>
