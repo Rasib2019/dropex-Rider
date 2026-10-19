@@ -1,4 +1,4 @@
-import { Bike, CalendarCheck, History, User, Wallet } from "lucide-react";
+import { Bike, CalendarCheck, History, Undo2, User, Wallet } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { supabase } from "./supabaseClient";
@@ -53,6 +53,38 @@ type Order = {
   rider_earning: number | null;
   requires_otp: boolean;
   failure_reason: string | null;
+};
+
+type RiderReturn = {
+  id: string;
+  return_number: string;
+  order_id: string;
+  order_number: string;
+  status: "open" | "returning" | "received_back" | "closed";
+  reason_code: string;
+  reason_note: string | null;
+  vendor_name: string | null;
+  return_to_address: string | null;
+  rider_returned_at: string | null;
+  rider_return_note: string | null;
+  created_at: string;
+  closed_at: string | null;
+};
+
+const FAIL_REASONS: { code: string; label: string }[] = [
+  { code: "customer_refused", label: "Customer refused the order" },
+  { code: "customer_unreachable", label: "Customer not reachable (phone off / no answer)" },
+  { code: "customer_unavailable", label: "Customer not at the address" },
+  { code: "customer_no_cash", label: "Customer did not have the cash" },
+  { code: "wrong_address", label: "Wrong or unfindable address" },
+  { code: "other", label: "Other (write below)" },
+];
+
+const RETURN_STATUS_LABELS: Record<string, string> = {
+  open: "Take it back",
+  returning: "Returning",
+  received_back: "Received by DropEx",
+  closed: "Closed",
 };
 
 type Action = "accept" | "reject" | "pickup" | "start" | "deliver";
@@ -179,7 +211,8 @@ export default function App() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [tab, setTab] = useState<"orders" | "history" | "attendance" | "earnings" | "account">("orders");
+  const [returns, setReturns] = useState<RiderReturn[]>([]);
+  const [tab, setTab] = useState<"orders" | "returns" | "history" | "attendance" | "earnings" | "account">("orders");
   const [blockedMsg, setBlockedMsg] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -209,6 +242,12 @@ export default function App() {
       }
       const list = (await callRpc<Order[] | null>("rider_my_orders")) ?? [];
       setOrders(list);
+      // Returns are optional: if the database function is not installed yet the rest of the app still works.
+      try {
+        setReturns((await callRpc<RiderReturn[] | null>("rider_my_returns")) ?? []);
+      } catch {
+        setReturns([]);
+      }
       setLoadError(null);
       setScreen("home");
 
@@ -529,6 +568,21 @@ export default function App() {
     await loadAll(true);
   }
 
+  async function handleReportFailed(orderId: string, reasonCode: string, note: string, attempts: number) {
+    await callRpc("rider_report_failed", {
+      p_order_id: orderId,
+      p_reason_code: reasonCode,
+      p_note: note || null,
+      p_attempts: attempts,
+    });
+    await loadAll(true);
+  }
+
+  async function handleReturnAction(returnId: string, action: "start" | "handed_over", note?: string) {
+    await callRpc("rider_return_action", { p_return: returnId, p_action: action, p_note: note || null });
+    await loadAll(true);
+  }
+
   // -------------------------------------------------------------------------
   // Screens
   // -------------------------------------------------------------------------
@@ -648,6 +702,7 @@ export default function App() {
     .sort((a, b) => STAGE_RANK[stageOf(a.status)] - STAGE_RANK[stageOf(b.status)]);
   const history = orders.filter((o) => stageOf(o.status) === "done");
   const list = tab === "orders" ? active : history;
+  const activeReturns = returns.filter((r) => r.status === "open" || r.status === "returning");
 
   return (
     <div className="app">
@@ -716,13 +771,25 @@ export default function App() {
           </>
         ) : null}
 
+        {tab === "returns" ? (
+          <>
+            <h1>Returns</h1>
+            <p className="hint">Orders you could not deliver. Take the item back to the pickup address and tell us when you have handed it back.</p>
+            {returns.length === 0 ? (
+              <p className="empty">No returns.</p>
+            ) : (
+              returns.map((r) => <ReturnCard key={r.id} ret={r} onAct={handleReturnAction} />)
+            )}
+          </>
+        ) : null}
+
         {tab === "orders" || tab === "history" ? (
           list.length === 0 ? (
             <p className="empty">
               {tab === "orders" ? "No active orders. New orders assigned to you will appear here." : "No past orders yet."}
             </p>
           ) : (
-            list.map((o) => <OrderCard key={o.id} order={o} defaultOpen={tab === "orders"} onAct={handleAction} />)
+            list.map((o) => <OrderCard key={o.id} order={o} defaultOpen={tab === "orders"} onAct={handleAction} onFail={handleReportFailed} />)
           )
         ) : null}
       </div>
@@ -731,6 +798,7 @@ export default function App() {
         {(
           [
             { key: "orders", label: "Orders", Icon: Bike, badge: active.length },
+            { key: "returns", label: "Returns", Icon: Undo2, badge: activeReturns.length },
             { key: "history", label: "History", Icon: History, badge: 0 },
             { key: "attendance", label: "Attendance", Icon: CalendarCheck, badge: 0 },
             { key: "earnings", label: "Earnings", Icon: Wallet, badge: 0 },
@@ -764,10 +832,12 @@ function OrderCard({
   order,
   defaultOpen,
   onAct,
+  onFail,
 }: {
   order: Order;
   defaultOpen: boolean;
   onAct: (orderId: string, action: Action, otp?: string, note?: string, weightKg?: number) => Promise<void>;
+  onFail: (orderId: string, reasonCode: string, note: string, attempts: number) => Promise<void>;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [otp, setOtp] = useState("");
@@ -946,7 +1016,7 @@ function OrderCard({
               <button className="primary" disabled={busy} onClick={() => act("start")}>
                 {busy ? "Please wait…" : "Start delivery"}
               </button>
-              <p className="office-note">Can't complete this order? Call the office — it can't be reported from here.</p>
+              <FailForm orderId={order.id} onFail={onFail} />
             </>
           ) : null}
 
@@ -979,11 +1049,176 @@ function OrderCard({
               >
                 {busy ? "Please wait…" : cod > 0 ? `Delivered — cash ${formatPKR(cod)} collected` : "Confirm delivery"}
               </button>
-              <p className="office-note">Can't complete this order? Call the office — it can't be reported from here.</p>
+              <FailForm orderId={order.id} onFail={onFail} />
             </>
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "Could not deliver" form (opens a return)
+// ---------------------------------------------------------------------------
+
+function FailForm({
+  orderId,
+  onFail,
+}: {
+  orderId: string;
+  onFail: (orderId: string, reasonCode: string, note: string, attempts: number) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("customer_refused");
+  const [attempts, setAttempts] = useState(1);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    if (reason === "other" && !note.trim()) {
+      setErr("Please write what happened.");
+      return;
+    }
+    if (!window.confirm("Report this order as NOT delivered? You will then have to take the item back.")) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      await onFail(orderId, reason, note.trim(), attempts);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not report this.");
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="secondary" onClick={() => setOpen(true)}>
+        I could not deliver this order
+      </button>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 8 }}>
+      <label htmlFor={`fail-reason-${orderId}`}>Why could you not deliver?</label>
+      <select id={`fail-reason-${orderId}`} value={reason} onChange={(e) => setReason(e.target.value)}>
+        {FAIL_REASONS.map((r) => (
+          <option key={r.code} value={r.code}>
+            {r.label}
+          </option>
+        ))}
+      </select>
+      <label htmlFor={`fail-attempts-${orderId}`}>How many times did you try?</label>
+      <select id={`fail-attempts-${orderId}`} value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
+        <option value={1}>1 time</option>
+        <option value={2}>2 times</option>
+        <option value={3}>3 times</option>
+      </select>
+      <label htmlFor={`fail-note-${orderId}`}>Note{reason === "other" ? "" : " (optional)"}</label>
+      <input id={`fail-note-${orderId}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What happened?" />
+      {err ? <div className="error">{err}</div> : null}
+      <button className="primary" disabled={busy} onClick={() => void submit()}>
+        {busy ? "Please wait…" : "Report not delivered"}
+      </button>
+      <button className="secondary" disabled={busy} onClick={() => setOpen(false)}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Return card
+// ---------------------------------------------------------------------------
+
+function ReturnCard({
+  ret,
+  onAct,
+}: {
+  ret: RiderReturn;
+  onAct: (returnId: string, action: "start" | "handed_over", note?: string) => Promise<void>;
+}) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const reasonLabel = FAIL_REASONS.find((r) => r.code === ret.reason_code)?.label ?? ret.reason_code;
+
+  async function act(action: "start" | "handed_over") {
+    setErr(null);
+    setBusy(true);
+    try {
+      await onAct(ret.id, action, action === "handed_over" ? note.trim() : undefined);
+      setNote("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card order-card">
+      <div className="order-head" style={{ cursor: "default" }}>
+        <div>
+          <div className="order-id">{ret.order_number}</div>
+          <div className="order-meta">
+            {ret.return_number} · {formatTime(ret.created_at)}
+          </div>
+        </div>
+        <div className="head-right">
+          <span className={ret.status === "closed" || ret.status === "received_back" ? "pill success" : "pill warn"}>
+            {RETURN_STATUS_LABELS[ret.status] ?? ret.status}
+          </span>
+        </div>
+      </div>
+      <div className="order-body">
+        <div className="kv">
+          <span>Reason</span>
+          <span>
+            {reasonLabel}
+            {ret.reason_note ? ` — ${ret.reason_note}` : ""}
+          </span>
+        </div>
+        <div className="addr">
+          <div className="addr-label">Take the item back to{ret.vendor_name ? ` (${ret.vendor_name})` : ""}</div>
+          <div className="addr-text">{ret.return_to_address ?? "Pickup address not available — ask the office"}</div>
+          {ret.return_to_address ? (
+            <a className="mini-link" href={mapsLink(ret.return_to_address)} target="_blank" rel="noreferrer">
+              Open in Maps
+            </a>
+          ) : null}
+        </div>
+
+        {err ? <div className="error">{err}</div> : null}
+
+        {ret.status === "open" ? (
+          <button className="primary" disabled={busy} onClick={() => void act("start")}>
+            {busy ? "Please wait…" : "I am taking the item back"}
+          </button>
+        ) : null}
+
+        {ret.status === "returning" && !ret.rider_returned_at ? (
+          <>
+            <label htmlFor={`ret-note-${ret.id}`}>Note (optional)</label>
+            <input
+              id={`ret-note-${ret.id}`}
+              placeholder="e.g. gave it to the shopkeeper"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+            <button className="primary" disabled={busy} onClick={() => void act("handed_over")}>
+              {busy ? "Please wait…" : "I handed the item back"}
+            </button>
+          </>
+        ) : null}
+
+        {ret.status === "returning" && ret.rider_returned_at ? (
+          <p className="hint">You reported the item as handed back at {formatTime(ret.rider_returned_at)}. DropEx will confirm it.</p>
+        ) : null}
+        {ret.status === "received_back" ? <p className="hint">DropEx has confirmed the item is back. Nothing more to do.</p> : null}
+      </div>
     </div>
   );
 }
