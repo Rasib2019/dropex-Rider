@@ -48,7 +48,11 @@ contains `{{ .Token }}` (same requirement as the Customer App).
 
 ## Order flow in this app
 
-assigned -> Accept -> picked up -> start delivery -> delivered (or failed with a reason).
+assigned -> Accept -> picked up -> start delivery -> delivered.
+If the order cannot be delivered the rider taps "I could not deliver this order", picks a reason, and the order becomes
+Failed with a return opened. The Returns tab then guides the rider: "I am taking the item back" -> "I handed the item back".
+Staff confirm the item is received and decide who bears the cost in the Ops Portal (Returns). This needs
+`supabase/rider_returns.sql` from the Ops Portal repo to be run once (after `order_returns.sql`).
 Reject sends the order back to the office to assign to someone else.
 When an order is delivered and has COD, the cash is recorded against the rider
 (shown as "Cash in hand") until Finance settles it in the portal.
