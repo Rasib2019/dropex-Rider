@@ -52,6 +52,7 @@ type Order = {
   confirmed_weight_kg: number | null;
   rider_earning: number | null;
   requires_otp: boolean;
+  requires_pickup_otp?: boolean;
   failure_reason: string | null;
 };
 
@@ -841,6 +842,7 @@ function OrderCard({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [otp, setOtp] = useState("");
+  const [pickupCode, setPickupCode] = useState("");
   const [note, setNote] = useState("");
   const [weightInput, setWeightInput] = useState(
     order.declared_weight_kg != null ? String(order.declared_weight_kg) : "",
@@ -864,6 +866,7 @@ function OrderCard({
     try {
       await onAct(order.id, action, extra?.otp, extra?.note, extra?.weightKg);
       setOtp("");
+      setPickupCode("");
       setNote("");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Action failed.");
@@ -1013,7 +1016,24 @@ function OrderCard({
 
           {stage === "toDeliver" ? (
             <>
-              <button className="primary" disabled={busy} onClick={() => act("start")}>
+              {order.requires_pickup_otp ? (
+                <>
+                  <label htmlFor={`pickup-otp-${order.id}`}>Pickup code (ask the shop)</label>
+                  <input
+                    id={`pickup-otp-${order.id}`}
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="4-digit code"
+                    value={pickupCode}
+                    onChange={(e) => setPickupCode(e.target.value.replace(/\D/g, ""))}
+                  />
+                </>
+              ) : null}
+              <button
+                className="primary"
+                disabled={busy || (!!order.requires_pickup_otp && pickupCode.length < 4)}
+                onClick={() => act("start", { otp: pickupCode })}
+              >
                 {busy ? "Please wait…" : "Start delivery"}
               </button>
               <FailForm orderId={order.id} onFail={onFail} />
