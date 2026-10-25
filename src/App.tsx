@@ -6,7 +6,43 @@ import dropexIcon from "./assets/dropex-icon.png";
 import { publishRiderPosition, clearRiderPosition } from "./riderPosition";
 import { useAttendance, useAttendanceHistory } from "./attendance";
 import { AttendanceCard, AttendanceHistory } from "./AttendancePanel";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { TurnstileCaptcha } from "./TurnstileCaptcha";
+import {
+  alertPermission,
+  enableAlerts,
+  playNewOrderSound,
+  showNewOrderNotification,
+  unlockAudio,
+  type AlertPermission,
+} from "./alerts";
+
+const CACHE_KEY = "dropex.rider.cache.v1";
+type RiderCache = { me: Me; orders: Order[]; returns: RiderReturn[] };
+
+function readCache(): RiderCache | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as RiderCache) : null;
+  } catch {
+    return null;
+  }
+}
+function writeCache(c: RiderCache): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(c));
+  } catch {
+    /* storage full / blocked: caching is best-effort */
+  }
+}
+function clearCache(): void {
+  try {
+    localStorage.removeItem(CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+const OFFLINE_MSG = "No internet connection. Please try again when you are back online.";
 
 // Lazy-loaded so the Google Maps JS API only downloads when a delivery is actually on the way.
 const DeliveryMap = lazy(() => import("./DeliveryMap").then((m) => ({ default: m.DeliveryMap })));
@@ -156,6 +192,32 @@ function pillClass(status: string): string {
   return "pill";
 }
 
+/** wa.me link for a Pakistani number (03xx… -> 923xx…). Returns null if it does not look like a phone number. */
+function whatsappLink(phone: string): string | null {
+  let d = phone.replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  else if (d.startsWith("0")) d = "92" + d.slice(1);
+  return d.length >= 11 && d.length <= 15 ? `https://wa.me/${d}` : null;
+}
+
+function CopyAddress({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      window.setTimeout(() => setDone(false), 1800);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+  return (
+    <button type="button" className="mini-link link-btn" onClick={() => void copy()}>
+      {done ? "Copied ✓" : "Copy"}
+    </button>
+  );
+}
+
 function mapsLink(address: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address + " Bahawalnagar")}`;
 }
@@ -225,6 +287,8 @@ export default function App() {
   meRef.current = me;
   const lastSentRef = useRef<{ lat: number; lng: number; t: number; orderId: string | null } | null>(null);
   const uploadingRef = useRef(false);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const [alertPerm, setAlertPerm] = useState<AlertPermission>(() => alertPermission());
 
   const loadAll = useCallback(async (silent: boolean, light = false) => {
     try {
@@ -244,11 +308,14 @@ export default function App() {
       const list = (await callRpc<Order[] | null>("rider_my_orders")) ?? [];
       setOrders(list);
       // Returns are optional: if the database function is not installed yet the rest of the app still works.
+      let rets: RiderReturn[] = [];
       try {
-        setReturns((await callRpc<RiderReturn[] | null>("rider_my_returns")) ?? []);
+        rets = (await callRpc<RiderReturn[] | null>("rider_my_returns")) ?? [];
       } catch {
-        setReturns([]);
+        rets = [];
       }
+      setReturns(rets);
+      writeCache({ me: m, orders: list, returns: rets });
       setLoadError(null);
       setScreen("home");
 
@@ -259,10 +326,26 @@ export default function App() {
         if (fresh) {
           setNotice("New order assigned to you!");
           if (typeof navigator.vibrate === "function") navigator.vibrate([200, 100, 200]);
+          playNewOrderSound();
+          if (document.visibilityState !== "visible") void showNewOrderNotification();
         }
       }
       seenAssigned.current = assignedIds;
     } catch (err) {
+      if (!navigator.onLine) {
+        // Offline: keep what is on screen; on a cold start show the last saved data instead of an error page.
+        if (!silent) {
+          const c = readCache();
+          if (c) {
+            setMe(c.me);
+            setOrders(c.orders);
+            setReturns(c.returns);
+            setScreen("home");
+            return;
+          }
+        }
+        if (silent) return;
+      }
       const msg = err instanceof Error ? err.message : "Could not load your data.";
       if (/not a rider account/i.test(msg)) {
         setBlockedMsg("This account is not a rider account.");
@@ -477,6 +560,20 @@ export default function App() {
     };
   }, [screen, me?.is_online]);
 
+  // Online/offline indicator + unlock sound on the first tap (browsers require a gesture).
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+      window.removeEventListener("pointerdown", unlockAudio);
+    };
+  }, []);
+
   // Shift + attendance (server-side RPCs; independent of the GPS watcher above).
   const attendance = useAttendance(screen === "home");
   const attendanceHistory = useAttendanceHistory(screen === "home", tab === "attendance", attendance.version);
@@ -542,11 +639,16 @@ export default function App() {
     setError(null);
     setCaptchaToken("");
     seenAssigned.current = null;
+    clearCache();
     setScreen("login");
   }
 
   async function toggleOnline() {
     if (!me) return;
+    if (!navigator.onLine) {
+      setLoadError(OFFLINE_MSG);
+      return;
+    }
     setToggleBusy(true);
     try {
       await callRpc("rider_set_online", { p_online: !me.is_online });
@@ -559,6 +661,7 @@ export default function App() {
   }
 
   async function handleAction(orderId: string, action: Action, otpValue?: string, note?: string, weightKg?: number) {
+    if (!navigator.onLine) throw new Error(OFFLINE_MSG);
     await callRpc("rider_update_order", {
       p_order_id: orderId,
       p_action: action,
@@ -570,6 +673,7 @@ export default function App() {
   }
 
   async function handleReportFailed(orderId: string, reasonCode: string, note: string, attempts: number) {
+    if (!navigator.onLine) throw new Error(OFFLINE_MSG);
     await callRpc("rider_report_failed", {
       p_order_id: orderId,
       p_reason_code: reasonCode,
@@ -709,7 +813,29 @@ export default function App() {
     <div className="app">
       {header}
       <div className="content">
+        {!online ? (
+          <div className="banner offline-banner" role="status">
+            You are offline. Showing your last saved orders — actions need internet.
+          </div>
+        ) : null}
         {notice ? <div className="banner">{notice}</div> : null}
+        {tab === "orders" && (alertPerm === "default" || alertPerm === "denied") ? (
+          <div className="card alert-card">
+            <div>
+              <strong>Order alerts</strong>
+              <p className="hint">
+                {alertPerm === "denied"
+                  ? "Notifications are blocked. Allow them in your browser settings to hear about new orders."
+                  : "Get a sound and notification when a new order is assigned to you."}
+              </p>
+            </div>
+            {alertPerm === "default" ? (
+              <button className="primary" onClick={() => void enableAlerts().then(setAlertPerm)}>
+                Turn on
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {loadError ? <div className="error">{loadError}</div> : null}
 
         <div className="card profile">
@@ -876,14 +1002,28 @@ function OrderCard({
     }
   }
 
+  const [confirmReject, setConfirmReject] = useState(false);
+
   function reject() {
-    if (!window.confirm("Reject this order? It will go back to the DropEx office to assign to someone else.")) return;
-    const reason = window.prompt("Reason (optional)") ?? "";
-    void act("reject", { note: reason });
+    setConfirmReject(true);
   }
 
   return (
     <div className="card order-card">
+      <ConfirmDialog
+        open={confirmReject}
+        title="Reject this order?"
+        message="It will go back to the DropEx office to assign to someone else."
+        confirmLabel="Reject order"
+        cancelLabel="Keep order"
+        reasonLabel="Reason (optional)"
+        busy={busy}
+        onCancel={() => setConfirmReject(false)}
+        onConfirm={(reason) => {
+          setConfirmReject(false);
+          void act("reject", { note: reason });
+        }}
+      />
       <button className="order-head" onClick={() => setOpen((v) => !v)}>
         <div>
           <div className="order-id">{order.order_number}</div>
@@ -904,18 +1044,24 @@ function OrderCard({
             <div className="addr-label">Pickup</div>
             <div className="addr-text">{order.pickup_address ?? "—"}</div>
             {order.pickup_address ? (
-              <a className="mini-link" href={mapsLink(order.pickup_address)} target="_blank" rel="noreferrer">
-                Open in Maps
-              </a>
+              <span className="addr-actions">
+                <a className="mini-link" href={mapsLink(order.pickup_address)} target="_blank" rel="noreferrer">
+                  Open in Maps
+                </a>
+                <CopyAddress text={order.pickup_address} />
+              </span>
             ) : null}
           </div>
           <div className="addr">
             <div className="addr-label">Drop-off</div>
             <div className="addr-text">{order.drop_address ?? "—"}</div>
             {order.drop_address ? (
-              <a className="mini-link" href={mapsLink(order.drop_address)} target="_blank" rel="noreferrer">
-                Open in Maps
-              </a>
+              <span className="addr-actions">
+                <a className="mini-link" href={mapsLink(order.drop_address)} target="_blank" rel="noreferrer">
+                  Open in Maps
+                </a>
+                <CopyAddress text={order.drop_address} />
+              </span>
             ) : null}
           </div>
 
@@ -936,6 +1082,14 @@ function OrderCard({
                   <a className="mini-link" href={`tel:${phone}`}>
                     {phone}
                   </a>
+                  {whatsappLink(phone) ? (
+                    <>
+                      {" · "}
+                      <a className="mini-link" href={whatsappLink(phone)!} target="_blank" rel="noreferrer">
+                        WhatsApp
+                      </a>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </span>
@@ -1097,12 +1251,19 @@ function FailForm({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function submit() {
+  const [confirmFail, setConfirmFail] = useState(false);
+
+  function submit() {
     if (reason === "other" && !note.trim()) {
       setErr("Please write what happened.");
       return;
     }
-    if (!window.confirm("Report this order as NOT delivered? You will then have to take the item back.")) return;
+    setErr(null);
+    setConfirmFail(true);
+  }
+
+  async function doSubmit() {
+    setConfirmFail(false);
     setErr(null);
     setBusy(true);
     try {
@@ -1123,6 +1284,16 @@ function FailForm({
 
   return (
     <div className="card" style={{ marginTop: 8 }}>
+      <ConfirmDialog
+        open={confirmFail}
+        title="Report as not delivered?"
+        message="You will then have to take the item back to the pickup address."
+        confirmLabel="Yes, report it"
+        cancelLabel="Go back"
+        busy={busy}
+        onCancel={() => setConfirmFail(false)}
+        onConfirm={() => void doSubmit()}
+      />
       <label htmlFor={`fail-reason-${orderId}`}>Why could you not deliver?</label>
       <select id={`fail-reason-${orderId}`} value={reason} onChange={(e) => setReason(e.target.value)}>
         {FAIL_REASONS.map((r) => (
@@ -1140,7 +1311,7 @@ function FailForm({
       <label htmlFor={`fail-note-${orderId}`}>Note{reason === "other" ? "" : " (optional)"}</label>
       <input id={`fail-note-${orderId}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What happened?" />
       {err ? <div className="error">{err}</div> : null}
-      <button className="primary" disabled={busy} onClick={() => void submit()}>
+      <button className="primary" disabled={busy} onClick={submit}>
         {busy ? "Please wait…" : "Report not delivered"}
       </button>
       <button className="secondary" disabled={busy} onClick={() => setOpen(false)}>
