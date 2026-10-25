@@ -729,7 +729,8 @@ export default function App() {
           </button>
         </div>
 
-        {tab === "orders" ? <AttendanceCard att={attendance} /> : null}
+        {/* Orders tab: show the check-in card only until the rider has checked in; then it disappears and orders take its place. Check-out stays on the Attendance tab. */}
+        {tab === "orders" && !attendance.data?.attendance?.check_in_at ? <AttendanceCard att={attendance} /> : null}
 
         {tab === "attendance" ? (
           <>
