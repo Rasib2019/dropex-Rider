@@ -58,11 +58,15 @@ export function TurnstileCaptcha({
         return;
       }
 
+      // Turnstile needs at least 300px for the normal/flexible widget; on very narrow
+      // screens use the compact (150px) one so it is never cut off.
+      const available = containerRef.current.parentElement?.clientWidth ?? 320;
+
       widgetIdRef.current = window.turnstile.render(
         containerRef.current,
         {
           sitekey: siteKey,
-          size: "flexible",
+          size: available < 310 ? "compact" : "flexible",
           theme: "auto",
 
           callback: onToken,
@@ -129,7 +133,7 @@ export function TurnstileCaptcha({
       style={{
         width: "100%",
         maxWidth: "100%",
-        overflow: "hidden",
+        overflow: "visible",
         boxSizing: "border-box",
         marginTop: "16px",
         marginBottom: "8px",
@@ -142,12 +146,13 @@ export function TurnstileCaptcha({
         ref={containerRef}
         style={{
           width: "100%",
-          maxWidth: "304px",
+          maxWidth: "100%",
           minHeight: "65px",
           boxSizing: "border-box",
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
+          overflow: "visible",
         }}
       />
     </div>
