@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { tr } from "./i18n";
+
 type Props = {
   open: boolean;
   title: string;
@@ -19,7 +21,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel,
-  cancelLabel = "Cancel",
+  cancelLabel,
   reasonLabel,
   busy = false,
   onConfirm,
@@ -67,7 +69,7 @@ export function ConfirmDialog({
         ) : null}
         <div className="dialog-actions">
           <button ref={cancelRef} className="secondary" onClick={onCancel} disabled={busy}>
-            {cancelLabel}
+            {cancelLabel ?? tr("Cancel")}
           </button>
           <button className="danger" onClick={() => onConfirm(reason.trim())} disabled={busy}>
             {confirmLabel}

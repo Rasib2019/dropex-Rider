@@ -7,6 +7,7 @@ import { publishRiderPosition, clearRiderPosition } from "./riderPosition";
 import { useAttendance, useAttendanceHistory } from "./attendance";
 import { AttendanceCard, AttendanceHistory } from "./AttendancePanel";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { locale, setLang, tr, useLang } from "./i18n";
 import { TurnstileCaptcha } from "./TurnstileCaptcha";
 import {
   alertPermission,
@@ -143,7 +144,7 @@ function formatPKR(n: number | null | undefined): string {
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-PK", {
+  return new Date(iso).toLocaleString(locale(), {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -224,7 +225,7 @@ function mapsLink(address: string): string {
 
 function friendlyLoginError(message: string): string {
   if (/signups not allowed|not allowed for otp|user not found/i.test(message)) {
-    return "This email is not registered as a rider. Please contact the DropEx office.";
+    return tr("This email is not registered as a rider. Please contact the DropEx office.");
   }
   return message;
 }
@@ -264,6 +265,7 @@ const ORDERS_FALLBACK_POLL_MS = 20_000; // orders list
 const ME_REFRESH_MS = 60_000; // rider_me (profile/online state) rarely changes on its own
 
 export default function App() {
+  const lang = useLang(); // re-render everything when the language changes
   const [screen, setScreen] = useState<Screen>("loading");
   const [emailInput, setEmailInput] = useState("");
   const [pendingEmail, setPendingEmail] = useState("");
@@ -299,8 +301,8 @@ export default function App() {
       if (m.approval_status !== "approved") {
         setBlockedMsg(
           m.approval_status === "pending"
-            ? "Your rider account is waiting for approval from the DropEx office."
-            : `Your rider account is ${m.approval_status}. Please contact the DropEx office.`,
+            ? tr("Your rider account is waiting for approval from the DropEx office.")
+            : tr("Your rider account is {status}. Please contact the DropEx office.", { status: m.approval_status }),
         );
         setScreen("blocked");
         return;
@@ -324,7 +326,7 @@ export default function App() {
       if (seenAssigned.current !== null) {
         const fresh = [...assignedIds].some((id) => !seenAssigned.current!.has(id));
         if (fresh) {
-          setNotice("New order assigned to you!");
+          setNotice(tr("New order assigned to you!"));
           if (typeof navigator.vibrate === "function") navigator.vibrate([200, 100, 200]);
           playNewOrderSound();
           if (document.visibilityState !== "visible") void showNewOrderNotification();
@@ -346,12 +348,12 @@ export default function App() {
         }
         if (silent) return;
       }
-      const msg = err instanceof Error ? err.message : "Could not load your data.";
+      const msg = tr(err instanceof Error ? err.message : "Could not load your data.");
       if (/not a rider account/i.test(msg)) {
-        setBlockedMsg("This account is not a rider account.");
+        setBlockedMsg(tr("This account is not a rider account."));
         setScreen("blocked");
       } else if (/not active/i.test(msg)) {
-        setBlockedMsg("Your account is not active. Please contact the DropEx office.");
+        setBlockedMsg(tr("Your account is not active. Please contact the DropEx office."));
         setScreen("blocked");
       } else if (silent) {
         setLoadError(msg);
@@ -475,7 +477,7 @@ export default function App() {
         if (locErr) {
           lastSentRef.current = last; // not saved: let the next fix retry
           console.error("Location upload failed:", locErr);
-          const msg = `Location not saved: ${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}`;
+          const msg = tr("Location not saved: {msg}", { msg: `${locErr.message}${locErr.code ? ` (${locErr.code})` : ""}` });
           if (msg !== lastLocationError) {
             lastLocationError = msg;
             setNotice(msg);
@@ -510,8 +512,8 @@ export default function App() {
       (err) => {
         console.warn("GPS error:", err.message);
         const msg = err.code === 1
-          ? "Location permission is blocked. Allow location for this app, or orders cannot be assigned to you."
-          : `GPS error: ${err.message}`;
+          ? tr("Location permission is blocked. Allow location for this app, or orders cannot be assigned to you.")
+          : tr("GPS error: {msg}", { msg: err.message });
         if (msg !== lastLocationError) {
           lastLocationError = msg;
           setNotice(msg);
@@ -591,19 +593,19 @@ export default function App() {
     try {
       const clean = emailInput.trim().toLowerCase();
       if (!captchaToken) {
-        throw new Error("Please complete the CAPTCHA verification.");
+        throw new Error(tr("Please complete the CAPTCHA verification."));
       }
       const { error: otpErr } = await supabase.auth.signInWithOtp({
         email: clean,
         options: { shouldCreateUser: false, captchaToken },
       });
-      if (otpErr) throw new Error(friendlyLoginError(otpErr.message));
+      if (otpErr) throw new Error(tr(friendlyLoginError(otpErr.message)));
       setPendingEmail(clean);
       setOtp("");
       setCaptchaToken("");
       setScreen("otp");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send the code.");
+      setError(tr(err instanceof Error ? err.message : "Could not send the code."));
     } finally {
       setBusy(false);
     }
@@ -619,11 +621,11 @@ export default function App() {
         token: otp.trim(),
         type: "email",
       });
-      if (vErr) throw new Error("That code is incorrect or has expired. Please try again.");
+      if (vErr) throw new Error(tr("That code is incorrect or has expired. Please try again."));
       seenAssigned.current = null;
       await loadAll(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not verify the code.");
+      setError(tr(err instanceof Error ? err.message : "Could not verify the code."));
     } finally {
       setBusy(false);
     }
@@ -646,7 +648,7 @@ export default function App() {
   async function toggleOnline() {
     if (!me) return;
     if (!navigator.onLine) {
-      setLoadError(OFFLINE_MSG);
+      setLoadError(tr(OFFLINE_MSG));
       return;
     }
     setToggleBusy(true);
@@ -654,14 +656,14 @@ export default function App() {
       await callRpc("rider_set_online", { p_online: !me.is_online });
       await loadAll(true);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not change your status.");
+      setLoadError(tr(err instanceof Error ? err.message : "Could not change your status."));
     } finally {
       setToggleBusy(false);
     }
   }
 
   async function handleAction(orderId: string, action: Action, otpValue?: string, note?: string, weightKg?: number) {
-    if (!navigator.onLine) throw new Error(OFFLINE_MSG);
+    if (!navigator.onLine) throw new Error(tr(OFFLINE_MSG));
     await callRpc("rider_update_order", {
       p_order_id: orderId,
       p_action: action,
@@ -673,7 +675,7 @@ export default function App() {
   }
 
   async function handleReportFailed(orderId: string, reasonCode: string, note: string, attempts: number) {
-    if (!navigator.onLine) throw new Error(OFFLINE_MSG);
+    if (!navigator.onLine) throw new Error(tr(OFFLINE_MSG));
     await callRpc("rider_report_failed", {
       p_order_id: orderId,
       p_reason_code: reasonCode,
@@ -698,14 +700,24 @@ export default function App() {
         <img className="brand-mark" src={dropexIcon} alt="" width={30} height={30} />
         <div className="brand-text">
           <span className="brand-name">DropEx</span>
-          <small>Rider</small>
+          <small>{tr("Rider")}</small>
         </div>
       </div>
-      {screen === "home" || screen === "blocked" ? (
-        <button className="link" onClick={signOut}>
-          Sign out
-        </button>
-      ) : null}
+      <div className="header-actions">
+        <div className="lang-switch" role="group" aria-label="Language / زبان">
+          <button type="button" className="lang-opt" aria-pressed={lang === "ur"} onClick={() => setLang("ur")}>
+            اردو
+          </button>
+          <button type="button" className="lang-opt" aria-pressed={lang === "en"} onClick={() => setLang("en")}>
+            English
+          </button>
+        </div>
+        {screen === "home" || screen === "blocked" ? (
+          <button className="link" onClick={signOut}>
+            {tr("Sign out")}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 
@@ -714,7 +726,7 @@ export default function App() {
       <div className="app">
         {header}
         <div className="content">
-          <p className="empty">Loading…</p>
+          <p className="empty">{tr("Loading…")}</p>
         </div>
       </div>
     );
@@ -726,10 +738,10 @@ export default function App() {
         {header}
         <div className="content">
           <div className="card">
-            <h1>Rider sign in</h1>
-            <p className="hint">Enter the email the DropEx office registered for you. We will send a 6-digit code.</p>
+            <h1>{tr("Rider sign in")}</h1>
+            <p className="hint">{tr("Enter the email the DropEx office registered for you. We will send a 6-digit code.")}</p>
             <form onSubmit={sendOtp}>
-              <label htmlFor="email">Email</label>
+              <label htmlFor="email">{tr("Email")}</label>
               <input
                 id="email"
                 type="email"
@@ -741,7 +753,7 @@ export default function App() {
               <TurnstileCaptcha onToken={setCaptchaToken} />
               {error ? <div className="error">{error}</div> : null}
               <button className="primary" type="submit" disabled={busy || !captchaToken}>
-                {busy ? "Sending…" : "Send code"}
+                {busy ? tr("Sending…") : tr("Send code")}
               </button>
             </form>
           </div>
@@ -756,10 +768,10 @@ export default function App() {
         {header}
         <div className="content">
           <div className="card">
-            <h1>Enter your code</h1>
-            <p className="hint">We sent a 6-digit code to {pendingEmail}. Check your inbox (and spam folder).</p>
+            <h1>{tr("Enter your code")}</h1>
+            <p className="hint">{tr("We sent a 6-digit code to {email}. Check your inbox (and spam folder).", { email: pendingEmail })}</p>
             <form onSubmit={verifyOtp}>
-              <label htmlFor="otp">Verification code</label>
+              <label htmlFor="otp">{tr("Verification code")}</label>
               <input
                 id="otp"
                 inputMode="numeric"
@@ -772,11 +784,11 @@ export default function App() {
               />
               {error ? <div className="error">{error}</div> : null}
               <button className="primary" type="submit" disabled={busy || otp.length < 6}>
-                {busy ? "Checking…" : "Sign in"}
+                {busy ? tr("Checking…") : tr("Sign in")}
               </button>
             </form>
             <button className="secondary" onClick={() => setScreen("login")}>
-              Use a different email
+              {tr("Use a different email")}
             </button>
           </div>
         </div>
@@ -790,10 +802,10 @@ export default function App() {
         {header}
         <div className="content">
           <div className="card">
-            <h1>Cannot open the rider app</h1>
+            <h1>{tr("Cannot open the rider app")}</h1>
             <p className="hint">{blockedMsg}</p>
             <button className="primary" onClick={() => loadAll(false)}>
-              Try again
+              {tr("Try again")}
             </button>
           </div>
         </div>
@@ -815,23 +827,23 @@ export default function App() {
       <div className="content">
         {!online ? (
           <div className="banner offline-banner" role="status">
-            You are offline. Showing your last saved orders — actions need internet.
+            {tr("You are offline. Showing your last saved orders — actions need internet.")}
           </div>
         ) : null}
         {notice ? <div className="banner">{notice}</div> : null}
         {tab === "orders" && (alertPerm === "default" || alertPerm === "denied") ? (
           <div className="card alert-card">
             <div>
-              <strong>Order alerts</strong>
+              <strong>{tr("Order alerts")}</strong>
               <p className="hint">
                 {alertPerm === "denied"
-                  ? "Notifications are blocked. Allow them in your browser settings to hear about new orders."
-                  : "Get a sound and notification when a new order is assigned to you."}
+                  ? tr("Notifications are blocked. Allow them in your browser settings to hear about new orders.")
+                  : tr("Get a sound and notification when a new order is assigned to you.")}
               </p>
             </div>
             {alertPerm === "default" ? (
               <button className="primary" onClick={() => void enableAlerts().then(setAlertPerm)}>
-                Turn on
+                {tr("Turn on")}
               </button>
             ) : null}
           </div>
@@ -842,7 +854,7 @@ export default function App() {
           <div>
             <div className="rider-name">{me?.full_name}</div>
             <div className="order-meta">
-              {[me?.vehicle_type, me?.vehicle_number].filter(Boolean).join(" · ") || "Rider"}
+              {[me?.vehicle_type, me?.vehicle_number].filter(Boolean).join(" · ") || tr("Rider")}
             </div>
           </div>
           <button
@@ -867,19 +879,19 @@ export default function App() {
 
         {tab === "earnings" ? (
           <>
-            <h1>Earnings</h1>
+            <h1>{tr("Earnings")}</h1>
             <div className="stats">
               <div className="stat">
                 <div className="stat-value">{me?.delivered_today ?? 0}</div>
-                <div className="stat-label">Delivered today</div>
+                <div className="stat-label">{tr("Delivered today")}</div>
               </div>
               <div className="stat">
                 <div className="stat-value">{formatPKR(me?.earnings_today)}</div>
-                <div className="stat-label">Earned today</div>
+                <div className="stat-label">{tr("Earned today")}</div>
               </div>
               <div className="stat">
                 <div className="stat-value">{formatPKR(me?.cod_in_hand)}</div>
-                <div className="stat-label">Cash in hand</div>
+                <div className="stat-label">{tr("Cash in hand")}</div>
               </div>
             </div>
           </>
@@ -887,24 +899,24 @@ export default function App() {
 
         {tab === "account" ? (
           <>
-            <h1>Account</h1>
+            <h1>{tr("Account")}</h1>
             <div className="card">
-              <div className="acct-row"><span>Name</span><span>{me?.full_name ?? "—"}</span></div>
-              <div className="acct-row"><span>Phone</span><span>{me?.phone ?? "—"}</span></div>
-              <div className="acct-row"><span>Vehicle</span><span>{[me?.vehicle_type, me?.vehicle_number].filter(Boolean).join(" · ") || "—"}</span></div>
+              <div className="acct-row"><span>{tr("Name")}</span><span>{me?.full_name ?? "—"}</span></div>
+              <div className="acct-row"><span>{tr("Phone")}</span><span>{me?.phone ?? "—"}</span></div>
+              <div className="acct-row"><span>{tr("Vehicle")}</span><span>{[me?.vehicle_type, me?.vehicle_number].filter(Boolean).join(" · ") || "—"}</span></div>
             </div>
             <button className="secondary" style={{ marginTop: 12 }} onClick={signOut}>
-              Sign out
+              {tr("Sign out")}
             </button>
           </>
         ) : null}
 
         {tab === "returns" ? (
           <>
-            <h1>Returns</h1>
-            <p className="hint">Orders you could not deliver. Take the item back to the pickup address and tell us when you have handed it back.</p>
+            <h1>{tr("Returns")}</h1>
+            <p className="hint">{tr("Orders you could not deliver. Take the item back to the pickup address and tell us when you have handed it back.")}</p>
             {returns.length === 0 ? (
-              <p className="empty">No returns.</p>
+              <p className="empty">{tr("No returns.")}</p>
             ) : (
               returns.map((r) => <ReturnCard key={r.id} ret={r} onAct={handleReturnAction} />)
             )}
@@ -914,7 +926,7 @@ export default function App() {
         {tab === "orders" || tab === "history" ? (
           list.length === 0 ? (
             <p className="empty">
-              {tab === "orders" ? "No active orders. New orders assigned to you will appear here." : "No past orders yet."}
+              {tab === "orders" ? tr("No active orders. New orders assigned to you will appear here.") : tr("No past orders yet.")}
             </p>
           ) : (
             list.map((o) => <OrderCard key={o.id} order={o} defaultOpen={tab === "orders"} onAct={handleAction} onFail={handleReportFailed} />)
@@ -922,7 +934,7 @@ export default function App() {
         ) : null}
       </div>
 
-      <nav className="bottom-nav" aria-label="Main navigation">
+      <nav className="bottom-nav" aria-label={tr("Main navigation")}>
         {(
           [
             { key: "orders", label: "Orders", Icon: Bike, badge: active.length },
@@ -944,7 +956,7 @@ export default function App() {
               <t.Icon size={22} aria-hidden="true" />
               {t.badge > 0 ? <span className="bottom-nav-badge">{t.badge}</span> : null}
             </span>
-            <span>{t.label}</span>
+            <span>{tr(t.label)}</span>
           </button>
         ))}
       </nav>
@@ -985,7 +997,7 @@ function OrderCard({
   );
   const cod = Number(order.cod_amount ?? 0);
   const phone = order.contact_phone || order.customer_phone || "";
-  const contact = order.contact_name || order.customer_name || "Customer";
+  const contact = order.contact_name || order.customer_name || tr("Customer");
 
   async function act(action: Action, extra?: { otp?: string; note?: string; weightKg?: number }) {
     setErr(null);
@@ -996,7 +1008,7 @@ function OrderCard({
       setPickupCode("");
       setNote("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Action failed.");
+      setErr(tr(e instanceof Error ? e.message : "Action failed."));
     } finally {
       setBusy(false);
     }
@@ -1012,11 +1024,11 @@ function OrderCard({
     <div className="card order-card">
       <ConfirmDialog
         open={confirmReject}
-        title="Reject this order?"
-        message="It will go back to the DropEx office to assign to someone else."
-        confirmLabel="Reject order"
-        cancelLabel="Keep order"
-        reasonLabel="Reason (optional)"
+        title={tr("Reject this order?")}
+        message={tr("It will go back to the DropEx office to assign to someone else.")}
+        confirmLabel={tr("Reject order")}
+        cancelLabel={tr("Keep order")}
+        reasonLabel={tr("Reason (optional)")}
         busy={busy}
         onCancel={() => setConfirmReject(false)}
         onConfirm={(reason) => {
@@ -1034,31 +1046,31 @@ function OrderCard({
         </div>
         <div className="head-right">
           {cod > 0 ? <span className="cod-chip">COD {formatPKR(cod)}</span> : null}
-          <span className={pillClass(order.status)}>{STATUS_LABELS[order.status] ?? order.status}</span>
+          <span className={pillClass(order.status)}>{tr(STATUS_LABELS[order.status] ?? order.status)}</span>
         </div>
       </button>
 
       {open ? (
         <div className="order-body">
           <div className="addr">
-            <div className="addr-label">Pickup</div>
+            <div className="addr-label">{tr("Pickup")}</div>
             <div className="addr-text">{order.pickup_address ?? "—"}</div>
             {order.pickup_address ? (
               <span className="addr-actions">
                 <a className="mini-link" href={mapsLink(order.pickup_address)} target="_blank" rel="noreferrer">
-                  Open in Maps
+                  {tr("Open in Maps")}
                 </a>
                 <CopyAddress text={order.pickup_address} />
               </span>
             ) : null}
           </div>
           <div className="addr">
-            <div className="addr-label">Drop-off</div>
+            <div className="addr-label">{tr("Drop-off")}</div>
             <div className="addr-text">{order.drop_address ?? "—"}</div>
             {order.drop_address ? (
               <span className="addr-actions">
                 <a className="mini-link" href={mapsLink(order.drop_address)} target="_blank" rel="noreferrer">
-                  Open in Maps
+                  {tr("Open in Maps")}
                 </a>
                 <CopyAddress text={order.drop_address} />
               </span>
@@ -1067,13 +1079,13 @@ function OrderCard({
 
           {stage === "onWay" && typeof order.drop_lat === "number" && typeof order.drop_lng === "number" ? (
             // Delivery started: live Rider -> Drop-off route (unmounts, and stops all updates, once delivered).
-            <Suspense fallback={<p className="hint">Loading map…</p>}>
+            <Suspense fallback={<p className="hint">{tr("Loading map…")}</p>}>
               <DeliveryMap drop={dropPoint} />
             </Suspense>
           ) : null}
 
           <div className="kv">
-            <span>Contact</span>
+            <span>{tr("Contact")}</span>
             <span>
               {contact}
               {phone ? (
@@ -1096,41 +1108,41 @@ function OrderCard({
           </div>
           {order.category ? (
             <div className="kv">
-              <span>Item</span>
+              <span>{tr("Item")}</span>
               <span>{order.category}</span>
             </div>
           ) : null}
           {order.declared_weight_kg != null ? (
             <div className="kv">
-              <span>Weight (customer estimate)</span>
+              <span>{tr("Weight (customer estimate)")}</span>
               <span>{order.declared_weight_kg} kg</span>
             </div>
           ) : null}
           {order.confirmed_weight_kg != null ? (
             <div className="kv">
-              <span>Weight (confirmed)</span>
+              <span>{tr("Weight (confirmed)")}</span>
               <span>{order.confirmed_weight_kg} kg</span>
             </div>
           ) : null}
           {order.notes ? (
             <div className="kv">
-              <span>Notes</span>
+              <span>{tr("Notes")}</span>
               <span>{order.notes}</span>
             </div>
           ) : null}
           <div className="kv">
-            <span>Your earning</span>
+            <span>{tr("Your earning")}</span>
             <span>{formatPKR(order.rider_earning)}</span>
           </div>
           {order.status === "failed" && order.failure_reason ? (
             <div className="kv">
-              <span>Reason</span>
+              <span>{tr("Reason")}</span>
               <span>{order.failure_reason}</span>
             </div>
           ) : null}
 
           {cod > 0 && stage !== "done" ? (
-            <div className="cod-banner">Collect {formatPKR(cod)} cash from the customer at drop-off.</div>
+            <div className="cod-banner">{tr("Collect {amount} cash from the customer at drop-off.", { amount: formatPKR(cod) })}</div>
           ) : null}
 
           {err ? <div className="error">{err}</div> : null}
@@ -1138,33 +1150,33 @@ function OrderCard({
           {stage === "new" ? (
             <>
               <button className="primary" disabled={busy} onClick={() => act("accept")}>
-                {busy ? "Please wait…" : "Accept order"}
+                {busy ? tr("Please wait…") : tr("Accept order")}
               </button>
               <button className="secondary" disabled={busy} onClick={reject}>
-                Reject
+                {tr("Reject")}
               </button>
             </>
           ) : null}
 
           {stage === "toPickup" ? (
             <>
-              <label htmlFor={`weight-${order.id}`}>Confirm actual weight (kg)</label>
+              <label htmlFor={`weight-${order.id}`}>{tr("Confirm actual weight (kg)")}</label>
               <input
                 id={`weight-${order.id}`}
                 inputMode="decimal"
                 value={weightInput}
                 onChange={(e) => setWeightInput(e.target.value.replace(/[^0-9.]/g, ""))}
-                placeholder="e.g. 3"
+                placeholder={tr("e.g. 3")}
               />
               <button
                 className="primary"
                 disabled={busy}
                 onClick={() => act("pickup", { weightKg: Number(weightInput) || undefined })}
               >
-                {busy ? "Please wait…" : "I have picked up the order"}
+                {busy ? tr("Please wait…") : tr("I have picked up the order")}
               </button>
               <button className="secondary" disabled={busy} onClick={reject}>
-                I cannot do this order
+                {tr("I cannot do this order")}
               </button>
             </>
           ) : null}
@@ -1173,12 +1185,12 @@ function OrderCard({
             <>
               {order.requires_pickup_otp ? (
                 <>
-                  <label htmlFor={`pickup-otp-${order.id}`}>Pickup code (ask the shop)</label>
+                  <label htmlFor={`pickup-otp-${order.id}`}>{tr("Pickup code (ask the shop)")}</label>
                   <input
                     id={`pickup-otp-${order.id}`}
                     inputMode="numeric"
                     maxLength={4}
-                    placeholder="4-digit code"
+                    placeholder={tr("4-digit code")}
                     value={pickupCode}
                     onChange={(e) => setPickupCode(e.target.value.replace(/\D/g, ""))}
                   />
@@ -1189,7 +1201,7 @@ function OrderCard({
                 disabled={busy || (!!order.requires_pickup_otp && pickupCode.length < 4)}
                 onClick={() => act("start", { otp: pickupCode })}
               >
-                {busy ? "Please wait…" : "Start delivery"}
+                {busy ? tr("Please wait…") : tr("Start delivery")}
               </button>
               <FailForm orderId={order.id} onFail={onFail} />
             </>
@@ -1199,21 +1211,21 @@ function OrderCard({
             <>
               {order.requires_otp ? (
                 <>
-                  <label htmlFor={`otp-${order.id}`}>Delivery code (ask the customer)</label>
+                  <label htmlFor={`otp-${order.id}`}>{tr("Delivery code (ask the customer)")}</label>
                   <input
                     id={`otp-${order.id}`}
                     inputMode="numeric"
                     maxLength={6}
-                    placeholder="Code"
+                    placeholder={tr("Code")}
                     value={otp}
                     onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
                   />
                 </>
               ) : null}
-              <label htmlFor={`note-${order.id}`}>Note (optional)</label>
+              <label htmlFor={`note-${order.id}`}>{tr("Note (optional)")}</label>
               <input
                 id={`note-${order.id}`}
-                placeholder="e.g. handed to the customer's brother"
+                placeholder={tr("e.g. handed to the customer's brother")}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />
@@ -1222,7 +1234,7 @@ function OrderCard({
                 disabled={busy || (order.requires_otp && otp.length === 0)}
                 onClick={() => act("deliver", { otp, note })}
               >
-                {busy ? "Please wait…" : cod > 0 ? `Delivered — cash ${formatPKR(cod)} collected` : "Confirm delivery"}
+                {busy ? tr("Please wait…") : cod > 0 ? tr("Delivered — cash {amount} collected", { amount: formatPKR(cod) }) : tr("Confirm delivery")}
               </button>
               <FailForm orderId={order.id} onFail={onFail} />
             </>
@@ -1255,7 +1267,7 @@ function FailForm({
 
   function submit() {
     if (reason === "other" && !note.trim()) {
-      setErr("Please write what happened.");
+      setErr(tr("Please write what happened."));
       return;
     }
     setErr(null);
@@ -1269,7 +1281,7 @@ function FailForm({
     try {
       await onFail(orderId, reason, note.trim(), attempts);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not report this.");
+      setErr(tr(e instanceof Error ? e.message : "Could not report this."));
       setBusy(false);
     }
   }
@@ -1277,7 +1289,7 @@ function FailForm({
   if (!open) {
     return (
       <button className="secondary" onClick={() => setOpen(true)}>
-        I could not deliver this order
+        {tr("I could not deliver this order")}
       </button>
     );
   }
@@ -1286,36 +1298,36 @@ function FailForm({
     <div className="card" style={{ marginTop: 8 }}>
       <ConfirmDialog
         open={confirmFail}
-        title="Report as not delivered?"
-        message="You will then have to take the item back to the pickup address."
-        confirmLabel="Yes, report it"
-        cancelLabel="Go back"
+        title={tr("Report as not delivered?")}
+        message={tr("You will then have to take the item back to the pickup address.")}
+        confirmLabel={tr("Yes, report it")}
+        cancelLabel={tr("Go back")}
         busy={busy}
         onCancel={() => setConfirmFail(false)}
         onConfirm={() => void doSubmit()}
       />
-      <label htmlFor={`fail-reason-${orderId}`}>Why could you not deliver?</label>
+      <label htmlFor={`fail-reason-${orderId}`}>{tr("Why could you not deliver?")}</label>
       <select id={`fail-reason-${orderId}`} value={reason} onChange={(e) => setReason(e.target.value)}>
         {FAIL_REASONS.map((r) => (
           <option key={r.code} value={r.code}>
-            {r.label}
+            {tr(r.label)}
           </option>
         ))}
       </select>
-      <label htmlFor={`fail-attempts-${orderId}`}>How many times did you try?</label>
+      <label htmlFor={`fail-attempts-${orderId}`}>{tr("How many times did you try?")}</label>
       <select id={`fail-attempts-${orderId}`} value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
-        <option value={1}>1 time</option>
-        <option value={2}>2 times</option>
-        <option value={3}>3 times</option>
+        <option value={1}>{tr("1 time")}</option>
+        <option value={2}>{tr("2 times")}</option>
+        <option value={3}>{tr("3 times")}</option>
       </select>
-      <label htmlFor={`fail-note-${orderId}`}>Note{reason === "other" ? "" : " (optional)"}</label>
-      <input id={`fail-note-${orderId}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What happened?" />
+      <label htmlFor={`fail-note-${orderId}`}>{reason === "other" ? tr("Note") : tr("Note (optional)")}</label>
+      <input id={`fail-note-${orderId}`} value={note} onChange={(e) => setNote(e.target.value)} placeholder={tr("What happened?")} />
       {err ? <div className="error">{err}</div> : null}
       <button className="primary" disabled={busy} onClick={submit}>
-        {busy ? "Please wait…" : "Report not delivered"}
+        {busy ? tr("Please wait…") : tr("Report not delivered")}
       </button>
       <button className="secondary" disabled={busy} onClick={() => setOpen(false)}>
-        Cancel
+        {tr("Cancel")}
       </button>
     </div>
   );
@@ -1335,7 +1347,7 @@ function ReturnCard({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const reasonLabel = FAIL_REASONS.find((r) => r.code === ret.reason_code)?.label ?? ret.reason_code;
+  const reasonLabel = tr(FAIL_REASONS.find((r) => r.code === ret.reason_code)?.label ?? ret.reason_code);
 
   async function act(action: "start" | "handed_over") {
     setErr(null);
@@ -1344,7 +1356,7 @@ function ReturnCard({
       await onAct(ret.id, action, action === "handed_over" ? note.trim() : undefined);
       setNote("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Action failed.");
+      setErr(tr(e instanceof Error ? e.message : "Action failed."));
     } finally {
       setBusy(false);
     }
@@ -1361,24 +1373,24 @@ function ReturnCard({
         </div>
         <div className="head-right">
           <span className={ret.status === "closed" || ret.status === "received_back" ? "pill success" : "pill warn"}>
-            {RETURN_STATUS_LABELS[ret.status] ?? ret.status}
+            {tr(RETURN_STATUS_LABELS[ret.status] ?? ret.status)}
           </span>
         </div>
       </div>
       <div className="order-body">
         <div className="kv">
-          <span>Reason</span>
+          <span>{tr("Reason")}</span>
           <span>
             {reasonLabel}
             {ret.reason_note ? ` — ${ret.reason_note}` : ""}
           </span>
         </div>
         <div className="addr">
-          <div className="addr-label">Take the item back to{ret.vendor_name ? ` (${ret.vendor_name})` : ""}</div>
-          <div className="addr-text">{ret.return_to_address ?? "Pickup address not available — ask the office"}</div>
+          <div className="addr-label">{tr("Take the item back to")}{ret.vendor_name ? ` (${ret.vendor_name})` : ""}</div>
+          <div className="addr-text">{ret.return_to_address ?? tr("Pickup address not available — ask the office")}</div>
           {ret.return_to_address ? (
             <a className="mini-link" href={mapsLink(ret.return_to_address)} target="_blank" rel="noreferrer">
-              Open in Maps
+              {tr("Open in Maps")}
             </a>
           ) : null}
         </div>
@@ -1387,29 +1399,29 @@ function ReturnCard({
 
         {ret.status === "open" ? (
           <button className="primary" disabled={busy} onClick={() => void act("start")}>
-            {busy ? "Please wait…" : "I am taking the item back"}
+            {busy ? tr("Please wait…") : tr("I am taking the item back")}
           </button>
         ) : null}
 
         {ret.status === "returning" && !ret.rider_returned_at ? (
           <>
-            <label htmlFor={`ret-note-${ret.id}`}>Note (optional)</label>
+            <label htmlFor={`ret-note-${ret.id}`}>{tr("Note (optional)")}</label>
             <input
               id={`ret-note-${ret.id}`}
-              placeholder="e.g. gave it to the shopkeeper"
+              placeholder={tr("e.g. gave it to the shopkeeper")}
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />
             <button className="primary" disabled={busy} onClick={() => void act("handed_over")}>
-              {busy ? "Please wait…" : "I handed the item back"}
+              {busy ? tr("Please wait…") : tr("I handed the item back")}
             </button>
           </>
         ) : null}
 
         {ret.status === "returning" && ret.rider_returned_at ? (
-          <p className="hint">You reported the item as handed back at {formatTime(ret.rider_returned_at)}. DropEx will confirm it.</p>
+          <p className="hint">{tr("You reported the item as handed back at {time}. DropEx will confirm it.", { time: formatTime(ret.rider_returned_at) })}</p>
         ) : null}
-        {ret.status === "received_back" ? <p className="hint">DropEx has confirmed the item is back. Nothing more to do.</p> : null}
+        {ret.status === "received_back" ? <p className="hint">{tr("DropEx has confirmed the item is back. Nothing more to do.")}</p> : null}
       </div>
     </div>
   );

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "./supabaseClient";
+import { getLang, locale, tr } from "./i18n";
 import { getLatestRiderFix } from "./riderPosition";
 
 export const BUSINESS_TZ = "Asia/Karachi";
@@ -93,7 +94,7 @@ export const MSG_PERMISSION = "Location permission is required to check in.";
 export class AttendanceError extends Error {
   code: string;
   constructor(code: string, message: string) {
-    super(message);
+    super(tr(message)); // known English messages (ours and the database's) are shown in the chosen language
     this.code = code;
   }
 }
@@ -210,7 +211,7 @@ export async function captureGpsSnapshot(maxAccuracy: number, action: "check in"
   if (best.accuracy > maxAccuracy) {
     throw new AttendanceError(
       "poor_accuracy",
-      `GPS signal is weak (accuracy ${Math.round(best.accuracy)} m). Move to an open area and try again.`,
+      tr("GPS signal is weak (accuracy {m} m). Move to an open area and try again.", { m: Math.round(best.accuracy) }),
     );
   }
   return best;
@@ -222,7 +223,7 @@ export async function captureGpsSnapshot(maxAccuracy: number, action: "check in"
 
 export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("en-US", {
+  return new Date(iso).toLocaleTimeString(getLang() === "ur" ? locale() : "en-US", {
     timeZone: BUSINESS_TZ,
     hour: "2-digit",
     minute: "2-digit",
@@ -234,7 +235,7 @@ export function fmtTime(iso: string | null | undefined): string {
 export function fmtDate(value: string | null | undefined, withYear = false): string {
   if (!value) return "—";
   const d = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00Z`) : new Date(value);
-  return d.toLocaleDateString("en-GB", {
+  return d.toLocaleDateString(getLang() === "ur" ? locale() : "en-GB", {
     timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? "UTC" : BUSINESS_TZ,
     weekday: "short",
     day: "2-digit",
@@ -247,7 +248,7 @@ export function fmtDuration(minutes: number | null | undefined): string {
   if (minutes == null) return "—";
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
-  return `${h}h ${String(m).padStart(2, "0")}m`;
+  return tr("{h}h {m}m", { h, m: String(m).padStart(2, "0") });
 }
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -308,7 +309,7 @@ export function useAttendance(active: boolean): AttendanceController {
       setData(res);
       setLoadError(null);
     } catch (e) {
-      if (!dataRef.current) setLoadError(e instanceof Error ? e.message : "Could not load your shift.");
+      if (!dataRef.current) setLoadError(tr(e instanceof Error ? e.message : "Could not load your shift."));
     } finally {
       setLoading(false);
     }
@@ -379,8 +380,10 @@ export function useAttendance(active: boolean): AttendanceController {
         const rec = res.context.attendance;
         setSuccess(
           kind === "in"
-            ? `Checked in at ${fmtTime(rec?.check_in_at)}${rec?.status === "late" ? ` — late by ${rec.late_minutes} min` : ""}.`
-            : `Checked out at ${fmtTime(rec?.check_out_at)}. Worked ${fmtDuration(rec?.working_minutes)}.`,
+            ? rec?.status === "late"
+              ? tr("Checked in at {time} — late by {min} min.", { time: fmtTime(rec?.check_in_at), min: rec.late_minutes })
+              : tr("Checked in at {time}.", { time: fmtTime(rec?.check_in_at) })
+            : tr("Checked out at {time}. Worked {dur}.", { time: fmtTime(rec?.check_out_at), dur: fmtDuration(rec?.working_minutes) }),
         );
         setVersion((v) => v + 1);
         timer.current = window.setTimeout(() => setSuccess(null), 8000);
@@ -437,7 +440,7 @@ export function useAttendanceHistory(signedIn: boolean, visible: boolean, versio
       setError(null);
     } catch (e) {
       if (mine !== seq.current) return;
-      setError(e instanceof Error ? e.message : "Could not load your attendance.");
+      setError(tr(e instanceof Error ? e.message : "Could not load your attendance."));
     } finally {
       if (mine === seq.current) setLoading(false);
     }

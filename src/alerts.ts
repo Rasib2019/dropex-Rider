@@ -2,6 +2,8 @@
 // Note: these work while the app is open or in the background of the browser/PWA.
 // Alerts when the app is fully closed need server-side Web Push (not included here).
 
+import { tr } from "./i18n";
+
 let ctx: AudioContext | null = null;
 
 function getCtx(): AudioContext | null {
@@ -61,9 +63,9 @@ export async function enableAlerts(): Promise<AlertPermission> {
 
 export async function showNewOrderNotification(): Promise<void> {
   if (alertPermission() !== "granted") return;
-  const title = "New DropEx order";
+  const title = tr("New DropEx order");
   const options: NotificationOptions = {
-    body: "A new order was assigned to you. Open the app to accept it.",
+    body: tr("A new order was assigned to you. Open the app to accept it."),
     icon: "/icon-192.png",
     badge: "/icon-192.png",
     tag: "dropex-new-order",
