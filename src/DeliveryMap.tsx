@@ -4,10 +4,21 @@ import { useEffect, useRef, useState } from "react";
 import { ensureGoogleMapsConfigured, GOOGLE_MAPS_KEY } from "./googleMaps";
 import { subscribeRiderPosition } from "./riderPosition";
 import { createRouteTracker, type LatLng } from "./routesApi";
+import { bearingDeg, distMeters, headingOnPath, lerpAngle, snapToPath } from "./riderMotion";
+import { createScooterOverlay, type ScooterOverlay } from "./scooterOverlay";
+
+/** GPS fixes farther than this from the road route are shown where they really are, not snapped. */
+const SNAP_MAX_METERS = 40;
+/** Rider must have moved this far before the movement direction is trusted as a heading (GPS jitter). */
+const MIN_HEADING_MOVE_METERS = 4;
+/** Glide time between two GPS fixes. */
+const GLIDE_MS = 1200;
+/** A jump bigger than this is shown instantly instead of gliding across the map. */
+const TELEPORT_METERS = 600;
 
 /**
  * Rider's live delivery map (shown on an order while it is "on the way"):
- * 🛵 rider's current position, 📍 customer drop-off, and the Google road route
+ * scooter at the rider's current position (sits on the road line, faces along it), 📍 customer drop-off, and the Google road route
  * Rider -> Drop-off.
  *
  * - Position comes from the existing GPS watcher (riderPosition.ts) — no second watcher.
@@ -31,7 +42,8 @@ export function DeliveryMap({ drop }: { drop: LatLng }) {
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
     let tracker: ReturnType<typeof createRouteTracker> | null = null;
-    let riderMarker: google.maps.Marker | null = null;
+    let scooter: ScooterOverlay | null = null;
+    let raf = 0;
     let dropMarker: google.maps.Marker | null = null;
     let line: google.maps.Polyline | null = null;
 
@@ -61,6 +73,62 @@ export function DeliveryMap({ drop }: { drop: LatLng }) {
 
       let fitted = false;
 
+      // --- Scooter: snapped onto the road route, turned along it, gliding between fixes ---
+      let routePath: LatLng[] | null = null;
+      let shown: LatLng | null = null;
+      let shownHeading = 0;
+      let lastMovedFix: LatLng | null = null;
+
+      function drawScooter(pos: LatLng, heading: number) {
+        if (!scooter) return;
+        shown = pos;
+        shownHeading = heading;
+        scooter.setPose(pos, heading);
+      }
+
+      function glideTo(target: LatLng, heading: number) {
+        cancelAnimationFrame(raf);
+        const from = shown;
+        if (!from || distMeters(from, target) > TELEPORT_METERS) {
+          drawScooter(target, heading);
+          return;
+        }
+        const fromHeading = shownHeading;
+        const start = performance.now();
+        const step = (now: number) => {
+          if (cancelled) return;
+          const t = Math.min(1, (now - start) / GLIDE_MS);
+          drawScooter(
+            { lat: from.lat + (target.lat - from.lat) * t, lng: from.lng + (target.lng - from.lng) * t },
+            lerpAngle(fromHeading, heading, t),
+          );
+          if (t < 1) raf = requestAnimationFrame(step);
+        };
+        raf = requestAnimationFrame(step);
+      }
+
+      function applyFix(raw: LatLng) {
+        if (cancelled) return;
+        let target = raw;
+        let heading: number | null = null;
+        const snap = routePath ? snapToPath(raw, routePath) : null;
+        if (routePath && snap && snap.distance <= SNAP_MAX_METERS) {
+          target = snap.point;
+          heading = headingOnPath(routePath, snap);
+        } else if (lastMovedFix && distMeters(lastMovedFix, raw) >= MIN_HEADING_MOVE_METERS) {
+          heading = bearingDeg(lastMovedFix, raw);
+        }
+        if (!lastMovedFix || distMeters(lastMovedFix, raw) >= MIN_HEADING_MOVE_METERS) lastMovedFix = raw;
+        const facing = heading ?? shownHeading;
+        if (!scooter) {
+          scooter = createScooterOverlay(map, target, facing);
+          shown = target;
+          shownHeading = facing;
+        } else {
+          glideTo(target, facing);
+        }
+      }
+
       function draw(path: LatLng[]) {
         if (cancelled) return;
         if (!line) line = new Polyline({ map, path, strokeColor: "#e11d48", strokeOpacity: 0.9, strokeWeight: 5 });
@@ -71,6 +139,8 @@ export function DeliveryMap({ drop }: { drop: LatLng }) {
         destination: drop,
         onRoute: (path) => {
           draw(path);
+          routePath = path;
+          if (riderPosRef.current) applyFix(riderPosRef.current); // re-snap onto the fresh road geometry
           if (!fitted) {
             fitted = true; // fit once only
             const bounds = new LatLngBounds();
@@ -89,11 +159,7 @@ export function DeliveryMap({ drop }: { drop: LatLng }) {
         if (cancelled) return;
         riderPosRef.current = pos;
         setHasFix(true);
-        if (!riderMarker) {
-          riderMarker = new Marker({ map, position: pos, label: { text: "🛵", fontSize: "20px" }, title: "You" });
-        } else {
-          riderMarker.setPosition(pos);
-        }
+        applyFix(pos);
         // Soft follow: only pan when the rider is close to the edge of the visible map.
         const b = map.getBounds();
         if (followRef.current && b && fitted) {
@@ -117,7 +183,8 @@ export function DeliveryMap({ drop }: { drop: LatLng }) {
       unsubscribe?.();
       tracker?.dispose();
       line?.setMap(null);
-      riderMarker?.setMap(null);
+      cancelAnimationFrame(raf);
+      scooter?.remove();
       dropMarker?.setMap(null);
       mapRef.current = null;
     };
